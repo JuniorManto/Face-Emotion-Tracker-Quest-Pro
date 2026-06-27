@@ -40,28 +40,31 @@ public class EmotionDisplay:MonoBehaviour
     if(classifier == null || emotionLabel == null)
       return;
 
-    string current = classifier.CurrentEmotion;
+    string currentEmotion = classifier.CurrentEmotion;
 
-    if(current == lastEmotion)
+    if(currentEmotion == lastEmotion)
       return;
 
-    Color32 c = emotionColors.ContainsKey(current) ? emotionColors[current] : new Color32(255, 255, 255, 255);
+    Color32 currentEmotionColor = emotionColors.ContainsKey(currentEmotion) ? emotionColors[currentEmotion] : new Color32(255, 255, 255, 255);
 
     //text gets the full saturated color
-    emotionLabel.color = c;
+    // emotionLabel.color = c;
 
     //panel gets the same hue but dimmed to ~1/6 brightness at 80% opacity
     //so it looks like a dark frosted card that tints the same color as the emotion
+    //update: /6 is a bit too dark, /4 might be better
     if(backgroundPanel != null)
     {
       backgroundPanel.color = new Color32(
-        (byte)(c.r / 6),
-        (byte)(c.g / 6),
-        (byte)(c.b / 6),
+        (byte)(currentEmotionColor.r / 4),
+        (byte)(currentEmotionColor.g / 4),
+        (byte)(currentEmotionColor.b / 4),
         200
       );
     }
 
-    lastEmotion = current;
+    lastEmotion = currentEmotion;
+
+    emotionLabel.text = $"Current Emotion: <color=#{ColorUtility.ToHtmlStringRGBA(currentEmotionColor)}>{currentEmotion}</color>";
   }
 }
