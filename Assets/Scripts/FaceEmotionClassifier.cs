@@ -30,7 +30,8 @@ public class FaceEmotionClassifier:MonoBehaviour
   private int frameCounter = 0;
   private float[] scoreBuffer = new float[6];
   
-  private float[] _currentFaceVector;
+private float[] _currentFaceVector;
+public float[] CurrentFaceVector => _currentFaceVector;
 
   //these are the emotion templates. each slot lines up with the feature order in BuildFaceVector below
   //1 means this muscle should be active for this emotion, 0 means it shouldnt
