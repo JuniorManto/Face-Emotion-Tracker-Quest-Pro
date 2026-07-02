@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "94282840552",
+    "project_id": "face-emotion-tracker",
+    "storage_bucket": "face-emotion-tracker.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:94282840552:android:c02a7523c43a3a064f0c5d",
+        "android_client_info": {
+          "package_name": "com.ovi.faceemotiontracker"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDOXeUKSzyUnC7gu6ONKd28joPdrmU9Ud8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
