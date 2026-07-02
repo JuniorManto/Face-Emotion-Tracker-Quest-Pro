@@ -1170,7 +1170,7 @@ MonoBehaviour:
   faceExpr: {fileID: 2071057527}
   activeThreshold: 0.2
   minSimilarity: 0.5
-  contemptAsymmetry: 0.3
+  contemptAsymmetry: 0.12
 --- !u!114 &2071057527
 MonoBehaviour:
   m_ObjectHideFlags: 0

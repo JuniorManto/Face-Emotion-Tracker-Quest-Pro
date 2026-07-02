@@ -27,11 +27,8 @@ public class FaceEmotionClassifier:MonoBehaviour
   //for contempt, how lopsided the two lip corners have to be before i call it contempt
   [SerializeField] private float contemptAsymmetry = 0.5f;
 
-  private int frameCounter = 0;
-  private float[] scoreBuffer = new float[6];
-  
-private float[] _currentFaceVector;
-public float[] CurrentFaceVector => _currentFaceVector;
+  private int frameCounter;
+  private float[] scoreBuffer = new float[7];
 
   //these are the emotion templates. each slot lines up with the feature order in BuildFaceVector below
   //1 means this muscle should be active for this emotion, 0 means it shouldnt
@@ -56,33 +53,10 @@ public float[] CurrentFaceVector => _currentFaceVector;
     if(faceExpr == null || !faceExpr.ValidExpressions)
       return;
 
-    //start with contempt since its the odd one out as its about one lip corner pulling way more than the other (asymmetry)
-    //cosine similarity cant really see that, so i check it directly first before the template matching
-    float pullL = faceExpr[OVRFaceExpressions.FaceExpression.LipCornerPullerL];
-    float pullR = faceExpr[OVRFaceExpressions.FaceExpression.LipCornerPullerR];
-    
-    Debug.Log($"PullL: {pullL}, PullR: {pullR}");
-    
-    if(Mathf.Abs(pullL - pullR) > contemptAsymmetry)
-    {
-      CurrentEmotion = "Contempt";
-      return;
-    }
-
     //build the live face vector (same feature order as the templates up top)
     float[] face = BuildFaceVector();
 
-    _currentFaceVector = face ?? new float[]{0,0,0};
-    //if basically nothing is active on the face, just call it neutral instead of guessing
-    if(MaxValue(face) < activeThreshold)
-    {
-      CurrentEmotion = "Neutral";
-      return;
-    }
-
     //compare the live face to every template and keep track of the best match
-    string bestEmotion = "Neutral";
-    float bestScore = 0f;
 
     scoreBuffer[0] += CosineSimilarity(face, happiness);
     scoreBuffer[1] += CosineSimilarity(face, sadness);
@@ -90,12 +64,18 @@ public float[] CurrentFaceVector => _currentFaceVector;
     scoreBuffer[3] += CosineSimilarity(face, fear);
     scoreBuffer[4] += CosineSimilarity(face, anger);
     scoreBuffer[5] += CosineSimilarity(face, disgust);
+    
+    //start with contempt since its the odd one out as its about one lip corner pulling way more than the other (asymmetry)
+    //cosine similarity cant really see that, so i check it directly first before the template matching
+    scoreBuffer[6] += ContemptCalculation(faceExpr[OVRFaceExpressions.FaceExpression.LipCornerPullerL], 
+      faceExpr[OVRFaceExpressions.FaceExpression.LipCornerPullerR], 
+      contemptAsymmetry);
 
     frameCounter++;
     if(frameCounter >= 10)
     {
       //find which emotion had the highest average score over the last 10 frames
-      string[] names = {"Happiness","Sadness","Surprise","Fear","Anger","Disgust"};
+      string[] names = {"Happiness","Sadness","Surprise","Fear","Anger","Disgust","Contempt"};
       int best = 0;
       for(int i = 1; i < scoreBuffer.Length; i++)
         if(scoreBuffer[i] > scoreBuffer[best]) best = i;
@@ -117,26 +97,7 @@ public float[] CurrentFaceVector => _currentFaceVector;
       frameCounter = 0;
     }
   }
-  
-  private string MajorityVote(string[] buffer)
-  {
-    //count how many times each emotion appeared in the last 5 frames
-    var counts = new System.Collections.Generic.Dictionary<string, int>();
-    foreach(string e in buffer)
-    {
-      if(!counts.ContainsKey(e)) counts[e] = 0;
-      counts[e]++;
-    }
-    //pick whichever one showed up the most
-    string winner = "Neutral";
-    int top = 0;
-    foreach(var pair in counts)
-    {
-      if(pair.Value > top){ top = pair.Value; winner = pair.Key; }
-    }
-    return winner;
-  }
-    
+
   //now we read the blendshapes we care about and pack them into one vector
   //this is something im trying which i might remove but i average the left and right sides so the rules read more cleanly
   //my reason is since most emotions are symmetric so this is a fair simplification
@@ -155,19 +116,15 @@ public float[] CurrentFaceVector => _currentFaceVector;
     float jawDrop = faceExpr[OVRFaceExpressions.FaceExpression.JawDrop];
 
     //this order must match the template arrays at the top or the whole comparison is meaningless
-    return new float[] {innerBrow, outerBrow, browLower, upperLid, cheekRaise, noseWrink, upperLip, smile, frown, lipStretch, jawDrop};
+    return new[] {innerBrow, outerBrow, browLower, upperLid, cheekRaise, noseWrink, upperLip, smile, frown, lipStretch, jawDrop};
+  }
+
+  private float ContemptCalculation(float pullL, float pullR, float maxAsymmetry)
+  {
+    return Mathf.Min(Mathf.Abs(pullL - pullR) / maxAsymmetry, 1);
   }
 
   //runs cosine similarity between the face and one template then updates the best match if this one scores higher
-  private void CheckMatch(string name, float[] template, float[] face, ref string bestEmotion, ref float bestScore)
-  {
-    float score = CosineSimilarity(face, template);
-    if(score > bestScore)
-    {
-      bestScore = score;
-      bestEmotion = name;
-    }
-  }
 
   //what cosine similarity means is how aligned two vectors are from 0 (unrelated) to 1 (same direction)
   //the formula from the paper is dot product of a and b divided by length of a times length of b
@@ -194,18 +151,5 @@ public float[] CurrentFaceVector => _currentFaceVector;
   private float Avg(OVRFaceExpressions.FaceExpression left, OVRFaceExpressions.FaceExpression right)
   {
     return (faceExpr[left] + faceExpr[right]) / 2f;
-  }
-
-  //small helper which finds the biggest value in the vector (used to spot a neutral face)
-  private float MaxValue(float[] values)
-  {
-    float biggest = 0f;
-    foreach(float v in values)
-    {
-      if(v > biggest) 
-        biggest = v;
-    }
-      
-    return biggest;
   }
 }
