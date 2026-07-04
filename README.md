@@ -5,4 +5,4 @@ Sadness: Squish your eyebrows together and make a frown\
 Anger: Squish your eyebrows down in anger like Angry Birds and open your eyes\
 Fear: Anger + jaw opening, so squish eyebrows down, eyes open, jaw open\
 Surprise: Raise your eyebrows\
-Disgust: Scrunch your nose\
+Disgust: Scrunch your nose
