@@ -25,13 +25,28 @@ public class FaceEmotionClassifier:MonoBehaviour
   //how confident the best match has to be (cosine runs 0 to 1) before i trust it
   [SerializeField] private float minSimilarity = 0.5f;
   //for contempt, how lopsided the two lip corners have to be before i call it contempt
-  [SerializeField] private float contemptAsymmetry = 0.5f;
-
-  private int frameCounter = 0;
-  private float[] scoreBuffer = new float[6];
+  [SerializeField] private float contemptAsymmetry = 0.12f;
   
-private float[] _currentFaceVector;
-public float[] CurrentFaceVector => _currentFaceVector;
+  //window size for the sliding average, in frames
+  [SerializeField] private int windowFrames = 20;
+  
+  //moved names of emotions to class level to let other scripts read like a debug display
+  public readonly string[] emotionNames =
+    { "Happiness", "Sadness", "Surprise", "Fear", "Anger", "Disgust", "Contempt" };
+  
+  //hold the current sliding average for the 7 emotions
+  //not just who won, but i need to see all 7 for debugging purposes
+  public float[] LastScores { get; private set; } = new float[7];
+
+  //circular buffer of raw per-frame scores, one row per frame slot, one column per emotion
+  //this is what lets us slide the window every frame instead of waiting for it to fill and dumping it
+  private float[,] scoreHistory;
+  //running total per emotion, kept in sync with scoreHistory so we never re-sum the whole window
+  private float[] runningSum = new float[7];
+  //where the next frame's scores get written, wraps back to 0 at windowFrames
+  private int writeIndex;
+  //counts up to windowFrames during warmup so early frames dont get diluted by empty slots
+  private int samplesWritten;
 
   //these are the emotion templates. each slot lines up with the feature order in BuildFaceVector below
   //1 means this muscle should be active for this emotion, 0 means it shouldnt
@@ -46,6 +61,8 @@ public float[] CurrentFaceVector => _currentFaceVector;
   private void Start()
   {
     Debug.Log($"Is Face Tracking enabled? {faceExpr.FaceTrackingEnabled}");
+    //sized once here since windowFrames is only set in the inspector, not at runtime
+    scoreHistory = new float[windowFrames, 7];
   }
 
   //update runs once every frame, which is exactly what we want for real time detection
@@ -56,87 +73,59 @@ public float[] CurrentFaceVector => _currentFaceVector;
     if(faceExpr == null || !faceExpr.ValidExpressions)
       return;
 
-    //start with contempt since its the odd one out as its about one lip corner pulling way more than the other (asymmetry)
-    //cosine similarity cant really see that, so i check it directly first before the template matching
-    float pullL = faceExpr[OVRFaceExpressions.FaceExpression.LipCornerPullerL];
-    float pullR = faceExpr[OVRFaceExpressions.FaceExpression.LipCornerPullerR];
-    
-    Debug.Log($"PullL: {pullL}, PullR: {pullR}");
-    
-    if(Mathf.Abs(pullL - pullR) > contemptAsymmetry)
-    {
-      CurrentEmotion = "Contempt";
-      return;
-    }
-
     //build the live face vector (same feature order as the templates up top)
     float[] face = BuildFaceVector();
 
-    _currentFaceVector = face ?? new float[]{0,0,0};
-    //if basically nothing is active on the face, just call it neutral instead of guessing
-    if(MaxValue(face) < activeThreshold)
-    {
-      CurrentEmotion = "Neutral";
-      return;
-    }
-
-    //compare the live face to every template and keep track of the best match
-    string bestEmotion = "Neutral";
-    float bestScore = 0f;
-
-    scoreBuffer[0] += CosineSimilarity(face, happiness);
-    scoreBuffer[1] += CosineSimilarity(face, sadness);
-    scoreBuffer[2] += CosineSimilarity(face, surprise);
-    scoreBuffer[3] += CosineSimilarity(face, fear);
-    scoreBuffer[4] += CosineSimilarity(face, anger);
-    scoreBuffer[5] += CosineSimilarity(face, disgust);
-
-    frameCounter++;
-    if(frameCounter >= 10)
-    {
-      //find which emotion had the highest average score over the last 10 frames
-      string[] names = {"Happiness","Sadness","Surprise","Fear","Anger","Disgust"};
-      int best = 0;
-      for(int i = 1; i < scoreBuffer.Length; i++)
-        if(scoreBuffer[i] > scoreBuffer[best]) best = i;
-
-      CurrentEmotion = (scoreBuffer[best] / 10f >= minSimilarity) ? names[best] : "Neutral";
-      
-      //disgust and fear can clash because fear naturally activates some nose wrinkle
-      //if disgust wins but we also see raised brows or open jaw, its more likely fear
-      if(CurrentEmotion == "Disgust")
-      {
-        float brow = (faceExpr[OVRFaceExpressions.FaceExpression.InnerBrowRaiserL] + faceExpr[OVRFaceExpressions.FaceExpression.InnerBrowRaiserR]) / 2f;
-        float jaw = faceExpr[OVRFaceExpressions.FaceExpression.JawDrop];
-        if(brow > 0.3f || jaw > 0.3f)
-          CurrentEmotion = "Fear";
-      }
-
-      //reset for next window
-      System.Array.Clear(scoreBuffer, 0, scoreBuffer.Length);
-      frameCounter = 0;
-    }
-  }
-  
-  private string MajorityVote(string[] buffer)
-  {
-    //count how many times each emotion appeared in the last 5 frames
-    var counts = new System.Collections.Generic.Dictionary<string, int>();
-    foreach(string e in buffer)
-    {
-      if(!counts.ContainsKey(e)) counts[e] = 0;
-      counts[e]++;
-    }
-    //pick whichever one showed up the most
-    string winner = "Neutral";
-    int top = 0;
-    foreach(var pair in counts)
-    {
-      if(pair.Value > top){ top = pair.Value; winner = pair.Key; }
-    }
-    return winner;
-  }
+    //this frames raw score per emotion, not yet averaged
+    float[] rawScores = new float[7];
+    rawScores[0] = CosineSimilarity(face, happiness);
+    rawScores[1] = CosineSimilarity(face, sadness);
+    rawScores[2] = CosineSimilarity(face, surprise);
+    rawScores[3] = CosineSimilarity(face, fear);
+    rawScores[4] = CosineSimilarity(face, anger);
+    rawScores[5] = CosineSimilarity(face, disgust);
     
+    //start with contempt since its the odd one out as its about one lip corner pulling way more than the other (asymmetry)
+    //cosine similarity cant really see that, so i check it directly first before the template matching
+    rawScores[6] = ContemptCalculation(faceExpr[OVRFaceExpressions.FaceExpression.LipCornerPullerL], 
+      faceExpr[OVRFaceExpressions.FaceExpression.LipCornerPullerR], 
+      contemptAsymmetry);
+
+    //slide the window: drop whatever was in this slot last time it was used, write the new value in its place
+    //keeping runningSum updated this way means the average below is a simple divide, no re-looping over the window
+    for(int i = 0; i < 7; i++)
+    {
+      runningSum[i] -= scoreHistory[writeIndex, i];
+      scoreHistory[writeIndex, i] = rawScores[i];
+      runningSum[i] += rawScores[i];
+    }
+    writeIndex = (writeIndex + 1) % windowFrames;
+    if(samplesWritten < windowFrames)
+      samplesWritten++;
+
+    //during warmup this divides by however many frames weve actually seen so far, not the full window
+    //once the buffer fills, samplesWritten just stays at windowFrames and this behaves like a normal average
+    int best = 0;
+    for(int i = 0; i < 7; i++)
+    {
+      LastScores[i] = runningSum[i] / samplesWritten;
+      if(LastScores[i] > LastScores[best]) best = i;
+    }
+
+    CurrentEmotion = (LastScores[best] >= minSimilarity) ? emotionNames[best] : "Neutral";
+
+    //disgust and fear can clash because fear naturally activates some nose wrinkle
+    //if disgust wins but we also see raised brows or open jaw, its more likely fear
+    if (CurrentEmotion == "Disgust")
+    {
+      float brow = (faceExpr[OVRFaceExpressions.FaceExpression.InnerBrowRaiserL] +
+                    faceExpr[OVRFaceExpressions.FaceExpression.InnerBrowRaiserR]) / 2f;
+      float jaw = faceExpr[OVRFaceExpressions.FaceExpression.JawDrop];
+      if (brow > 0.3f || jaw > 0.3f)
+        CurrentEmotion = "Fear";
+    }
+  }
+
   //now we read the blendshapes we care about and pack them into one vector
   //this is something im trying which i might remove but i average the left and right sides so the rules read more cleanly
   //my reason is since most emotions are symmetric so this is a fair simplification
@@ -155,19 +144,15 @@ public float[] CurrentFaceVector => _currentFaceVector;
     float jawDrop = faceExpr[OVRFaceExpressions.FaceExpression.JawDrop];
 
     //this order must match the template arrays at the top or the whole comparison is meaningless
-    return new float[] {innerBrow, outerBrow, browLower, upperLid, cheekRaise, noseWrink, upperLip, smile, frown, lipStretch, jawDrop};
+    return new[] {innerBrow, outerBrow, browLower, upperLid, cheekRaise, noseWrink, upperLip, smile, frown, lipStretch, jawDrop};
+  }
+
+  private float ContemptCalculation(float pullL, float pullR, float maxAsymmetry)
+  {
+    return Mathf.Min(Mathf.Abs(pullL - pullR) / maxAsymmetry, 1);
   }
 
   //runs cosine similarity between the face and one template then updates the best match if this one scores higher
-  private void CheckMatch(string name, float[] template, float[] face, ref string bestEmotion, ref float bestScore)
-  {
-    float score = CosineSimilarity(face, template);
-    if(score > bestScore)
-    {
-      bestScore = score;
-      bestEmotion = name;
-    }
-  }
 
   //what cosine similarity means is how aligned two vectors are from 0 (unrelated) to 1 (same direction)
   //the formula from the paper is dot product of a and b divided by length of a times length of b
@@ -194,18 +179,5 @@ public float[] CurrentFaceVector => _currentFaceVector;
   private float Avg(OVRFaceExpressions.FaceExpression left, OVRFaceExpressions.FaceExpression right)
   {
     return (faceExpr[left] + faceExpr[right]) / 2f;
-  }
-
-  //small helper which finds the biggest value in the vector (used to spot a neutral face)
-  private float MaxValue(float[] values)
-  {
-    float biggest = 0f;
-    foreach(float v in values)
-    {
-      if(v > biggest) 
-        biggest = v;
-    }
-      
-    return biggest;
   }
 }
