@@ -19,7 +19,10 @@ public class EmotionDisplay:MonoBehaviour
   //drag the panel gameobject (with Image component) in here in the inspector
   [SerializeField] private Image backgroundPanel;
 
+  public DatabaseManager databaseManager;
   private string lastEmotion = "";
+
+  public string currentPartnerEmotion = "Neutral";
 
   //full brightness emotion colors for the text
   //also used at 1/6 brightness for the panel tint so its the same hue but dark
@@ -39,13 +42,15 @@ public class EmotionDisplay:MonoBehaviour
   {
     if(classifier == null || emotionLabel == null)
       return;
+    
+    StartCoroutine(databaseManager.LogCurrentEmotion(classifier.CurrentEmotion));
+    StartCoroutine(databaseManager.ReadCurrentPartnerEmotion());
 
-    string currentEmotion = classifier.CurrentEmotion;
-
-    if(currentEmotion == lastEmotion)
+    if(currentPartnerEmotion == lastEmotion)
       return;
 
-    Color32 currentEmotionColor = emotionColors.ContainsKey(currentEmotion) ? emotionColors[currentEmotion] : new Color32(255, 255, 255, 255);
+    Color32 currentEmotionColor = emotionColors.ContainsKey(currentPartnerEmotion) ? emotionColors[currentPartnerEmotion] : new Color32(255, 255, 255, 255);
+    
 
     //text gets the full saturated color
     // emotionLabel.color = c;
@@ -63,8 +68,8 @@ public class EmotionDisplay:MonoBehaviour
       );
     }
 
-    lastEmotion = currentEmotion;
+    lastEmotion = currentPartnerEmotion;
 
-    emotionLabel.text = $"Current Emotion: <color=#{ColorUtility.ToHtmlStringRGBA(currentEmotionColor)}>{currentEmotion}</color>";
+    emotionLabel.text = $"Current Emotion: <color=#{ColorUtility.ToHtmlStringRGBA(currentEmotionColor)}>{currentPartnerEmotion}</color>";
   }
 }

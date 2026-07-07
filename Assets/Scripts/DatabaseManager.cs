@@ -7,6 +7,7 @@ using UnityEngine;
 public class DatabaseManager : MonoBehaviour
 {
     private DatabaseReference _reference;
+    public EmotionDisplay emotionDisplay;
 
     private void Start()
     {
@@ -19,8 +20,6 @@ public class DatabaseManager : MonoBehaviour
 
         var app = Firebase.FirebaseApp.Create(options);
         _reference = FirebaseDatabase.GetInstance(app).RootReference;
-
-        StartCoroutine(ReadHappinessThreshold());
     }
 
     public IEnumerator ReadHappinessThreshold()
@@ -37,6 +36,36 @@ public class DatabaseManager : MonoBehaviour
         DataSnapshot snapshot = dbTask.Result;
         
         Debug.Log("Happiness threshold is: " + snapshot.Value);
+    }
+    
+    public IEnumerator LogCurrentEmotion(string text)
+    {
+        var dbTask = _reference
+            .Child("currentEmotion2")
+            .SetValueAsync(text);
+        
+        yield return new WaitUntil(() => dbTask.IsCompleted);
+
+        if (dbTask.Exception != null)
+        {
+            Debug.LogError($"Firebase write failed: {dbTask.Exception}");
+        }
+    }
+    
+    public IEnumerator ReadCurrentPartnerEmotion()
+    {
+        var dbTask = _reference.Child("currentEmotion1").GetValueAsync();
+        yield return new WaitUntil(() => dbTask.IsCompleted);
+
+        if (dbTask.Exception != null)
+        {
+            Debug.LogError(dbTask.Exception);
+            yield break;
+        }
+
+        DataSnapshot snapshot = dbTask.Result;
+        
+        emotionDisplay.currentPartnerEmotion = snapshot.Value.ToString();
     }
     
     private string GetTime()

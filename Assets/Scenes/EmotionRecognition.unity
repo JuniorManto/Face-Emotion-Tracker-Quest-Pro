@@ -1092,6 +1092,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0967f956bcc322d45ae058a031ca5103, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::DatabaseManager
+  emotionDisplay: {fileID: 2071057525}
 --- !u!4 &1155793701
 Transform:
   m_ObjectHideFlags: 0
@@ -1340,6 +1341,8 @@ MonoBehaviour:
   classifier: {fileID: 2071057526}
   emotionLabel: {fileID: 169680267}
   backgroundPanel: {fileID: 512764638}
+  databaseManager: {fileID: 1155793700}
+  currentPartnerEmotion: Neutral
 --- !u!114 &2071057526
 MonoBehaviour:
   m_ObjectHideFlags: 0

@@ -99,7 +99,7 @@ MonoBehaviour:
     - line: '|   AndroidProfiler: 0'
     - line: '|   AndroidFilterTouchesWhenObscured: 0'
     - line: '|   AndroidEnableSustainedPerformanceMode: 0'
-    - line: '|   defaultScreenOrientation: 4'
+    - line: '|   defaultScreenOrientation: 3'
     - line: '|   targetDevice: 2'
     - line: '|   useOnDemandResources: 0'
     - line: '|   accelerometerFrequency: 60'
@@ -241,7 +241,15 @@ MonoBehaviour:
     - line: '|   visionOSBundleVersion: 1.0'
     - line: '|   tvOSBundleVersion: 1.0'
     - line: '|   bundleVersion: 0.1.0'
-    - line: '|   preloadedAssets: []'
+    - line: '|   preloadedAssets:'
+    - line: '|   - {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b,
+        type: 3}'
+    - line: '|   - {fileID: 11400000, guid: ecd5467174fc3d844bf2ab988f3b2248, type:
+        2}'
+    - line: '|   - {fileID: -6085557228754338452, guid: 1f9814e94b1c22e48be84499ed714dc2,
+        type: 2}'
+    - line: '|   - {fileID: -6722928918795324393, guid: 16436d6e884fb2642832b7510ed71b4b,
+        type: 2}'
     - line: '|   metroInputSource: 0'
     - line: '|   wsaTransparentSwapchain: 0'
     - line: '|   xboxOneDisableKinectGpuReservation: 1'
@@ -271,9 +279,9 @@ MonoBehaviour:
     - line: '|     tvOS: 0'
     - line: '|   overrideDefaultApplicationIdentifier: 1'
     - line: '|   AndroidBundleVersionCode: 1'
-    - line: '|   AndroidMinSdkVersion: 29'
-    - line: '|   AndroidTargetSdkVersion: 32'
-    - line: '|   AndroidPreferredInstallLocation: 1'
+    - line: '|   AndroidMinSdkVersion: 32'
+    - line: '|   AndroidTargetSdkVersion: 34'
+    - line: '|   AndroidPreferredInstallLocation: 0'
     - line: '|   AndroidPreferredDataLocation: 1'
     - line: '|   aotOptions: '
     - line: '|   stripEngineCode: 1'
@@ -619,10 +627,17 @@ MonoBehaviour:
     - line: '|       m_Height: 720'
     - line: '|       m_Kind: 1'
     - line: '|       m_SubKind: '
-    - line: '|   m_BuildTargetBatching: []'
+    - line: '|   m_BuildTargetBatching:'
+    - line: '|   - m_BuildTarget: Android'
+    - line: '|     m_StaticBatching: 1'
+    - line: '|     m_DynamicBatching: 0'
     - line: '|   m_BuildTargetShaderSettings: []'
-    - line: '|   m_BuildTargetGraphicsJobs: []'
-    - line: '|   m_BuildTargetGraphicsJobMode: []'
+    - line: '|   m_BuildTargetGraphicsJobs:'
+    - line: '|   - m_BuildTarget: AndroidPlayer'
+    - line: '|     m_GraphicsJobs: 1'
+    - line: '|   m_BuildTargetGraphicsJobMode:'
+    - line: '|   - m_BuildTarget: AndroidPlayer'
+    - line: '|     m_GraphicsJobMode: 1'
     - line: '|   m_BuildTargetGraphicsAPIs:'
     - line: '|   - m_BuildTarget: iOSSupport'
     - line: '|     m_APIs: 10000000'
@@ -921,7 +936,9 @@ MonoBehaviour:
     - line: '|   webGLCloseOnQuit: 0'
     - line: '|   webWasm2023: 1'
     - line: '|   webEnableSubmoduleStrippingCompatibility: 0'
-    - line: '|   scriptingDefineSymbols: {}'
+    - line: '|   scriptingDefineSymbols:'
+    - line: '|     Android: OVR_DISABLE_HAND_PINCH_BUTTON_MAPPING'
+    - line: '|     Standalone: OVR_DISABLE_HAND_PINCH_BUTTON_MAPPING'
     - line: '|   additionalCompilerArguments: {}'
     - line: '|   platformArchitecture: {}'
     - line: '|   scriptingBackend:'
@@ -1067,7 +1084,7 @@ MonoBehaviour:
         m_ExportAsGoogleAndroidProject: 0
         m_DebugSymbolLevel: 1
         m_DebugSymbolFormat: 5
-        m_CurrentDeploymentTargetId: __builtin__target_default
+        m_CurrentDeploymentTargetId: 230YC01D7V004G
         m_BuildType: 2
         m_LinkTimeOptimization: 0
         m_BuildAppBundle: 0
