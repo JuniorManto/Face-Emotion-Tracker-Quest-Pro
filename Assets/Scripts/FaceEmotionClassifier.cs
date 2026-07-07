@@ -32,17 +32,17 @@ public class FaceEmotionClassifier:MonoBehaviour
   
   //moved names of emotions to class level to let other scripts read like a debug display
   public readonly string[] emotionNames =
-    { "Happiness", "Sadness", "Surprise", "Fear", "Anger", "Disgust", "Contempt" };
+    { "Happiness", "Sadness", "Surprise", "Fear", "Anger", "Disgust", "Contempt", "Neutral" };
   
   //hold the current sliding average for the 7 emotions
   //not just who won, but i need to see all 7 for debugging purposes
-  public float[] LastScores { get; private set; } = new float[7];
+  public float[] LastScores { get; private set; } = new float[8];
 
   //circular buffer of raw per-frame scores, one row per frame slot, one column per emotion
   //this is what lets us slide the window every frame instead of waiting for it to fill and dumping it
   private float[,] scoreHistory;
   //running total per emotion, kept in sync with scoreHistory so we never re-sum the whole window
-  private float[] runningSum = new float[7];
+  private float[] runningSum = new float[8];
   //where the next frame's scores get written, wraps back to 0 at windowFrames
   private int writeIndex;
   //counts up to windowFrames during warmup so early frames dont get diluted by empty slots
@@ -50,19 +50,20 @@ public class FaceEmotionClassifier:MonoBehaviour
 
   //these are the emotion templates. each slot lines up with the feature order in BuildFaceVector below
   //1 means this muscle should be active for this emotion, 0 means it shouldnt
-  //the order is innerBrow, outerBrow, browLower, upperLid, cheekRaise, noseWrinkle, upperLip, smile, frown, lipStretch, jawDrop
-  private readonly float[] happiness = {0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0};
-  private readonly float[] sadness = {1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0};
-  private readonly float[] surprise = {1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1};
-  private readonly float[] fear = {1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1};
-  private readonly float[] anger = {0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0};
-  private readonly float[] disgust = {0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0};
+  //the order is innerBrow (1), outerBrow (2), browLower (3), upperLid (4), cheekRaise (5), noseWrinkle (6), upperLip (7), smile (8), frown (9), lipStretch (10), jawDrop (11), tighterLid (12), mouthPucker (13), mouthLowerDown (14)
+  private readonly float[] happiness = {0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0};
+  private readonly float[] sadness = {1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0};
+  private readonly float[] surprise = {1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0};
+  private readonly float[] fear = {1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0};
+  private readonly float[] anger = {0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0};
+  private readonly float[] disgust = {0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1};
+  private readonly float[] neutral = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
   private void Start()
   {
     Debug.Log($"Is Face Tracking enabled? {faceExpr.FaceTrackingEnabled}");
     //sized once here since windowFrames is only set in the inspector, not at runtime
-    scoreHistory = new float[windowFrames, 7];
+    scoreHistory = new float[windowFrames, 8];
   }
 
   //update runs once every frame, which is exactly what we want for real time detection
@@ -77,13 +78,14 @@ public class FaceEmotionClassifier:MonoBehaviour
     float[] face = BuildFaceVector();
 
     //this frames raw score per emotion, not yet averaged
-    float[] rawScores = new float[7];
+    float[] rawScores = new float[8];
     rawScores[0] = CosineSimilarity(face, happiness);
     rawScores[1] = CosineSimilarity(face, sadness);
     rawScores[2] = CosineSimilarity(face, surprise);
     rawScores[3] = CosineSimilarity(face, fear);
     rawScores[4] = CosineSimilarity(face, anger);
     rawScores[5] = CosineSimilarity(face, disgust);
+    rawScores[7] = CosineSimilarity(face, neutral);
     
     //start with contempt since its the odd one out as its about one lip corner pulling way more than the other (asymmetry)
     //cosine similarity cant really see that, so i check it directly first before the template matching
@@ -93,7 +95,7 @@ public class FaceEmotionClassifier:MonoBehaviour
 
     //slide the window: drop whatever was in this slot last time it was used, write the new value in its place
     //keeping runningSum updated this way means the average below is a simple divide, no re-looping over the window
-    for(int i = 0; i < 7; i++)
+    for(int i = 0; i < rawScores.Length; i++)
     {
       runningSum[i] -= scoreHistory[writeIndex, i];
       scoreHistory[writeIndex, i] = rawScores[i];
@@ -106,7 +108,7 @@ public class FaceEmotionClassifier:MonoBehaviour
     //during warmup this divides by however many frames weve actually seen so far, not the full window
     //once the buffer fills, samplesWritten just stays at windowFrames and this behaves like a normal average
     int best = 0;
-    for(int i = 0; i < 7; i++)
+    for(int i = 0; i < rawScores.Length; i++)
     {
       LastScores[i] = runningSum[i] / samplesWritten;
       if(LastScores[i] > LastScores[best]) best = i;
@@ -135,6 +137,8 @@ public class FaceEmotionClassifier:MonoBehaviour
     float outerBrow = Avg(OVRFaceExpressions.FaceExpression.OuterBrowRaiserL, OVRFaceExpressions.FaceExpression.OuterBrowRaiserR);
     float browLower = Avg(OVRFaceExpressions.FaceExpression.BrowLowererL, OVRFaceExpressions.FaceExpression.BrowLowererR);
     float upperLid = Avg(OVRFaceExpressions.FaceExpression.UpperLidRaiserL, OVRFaceExpressions.FaceExpression.UpperLidRaiserR);
+    float tighterLid = Avg(OVRFaceExpressions.FaceExpression.LidTightenerL, OVRFaceExpressions.FaceExpression.LidTightenerR);
+    float mouthPucker = Avg(OVRFaceExpressions.FaceExpression.LipPuckerL, OVRFaceExpressions.FaceExpression.LipPuckerR);
     float cheekRaise = Avg(OVRFaceExpressions.FaceExpression.CheekRaiserL, OVRFaceExpressions.FaceExpression.CheekRaiserR);
     float noseWrink = Avg(OVRFaceExpressions.FaceExpression.NoseWrinklerL, OVRFaceExpressions.FaceExpression.NoseWrinklerR);
     float upperLip = Avg(OVRFaceExpressions.FaceExpression.UpperLipRaiserL, OVRFaceExpressions.FaceExpression.UpperLipRaiserR);
@@ -142,9 +146,10 @@ public class FaceEmotionClassifier:MonoBehaviour
     float frown = Avg(OVRFaceExpressions.FaceExpression.LipCornerDepressorL, OVRFaceExpressions.FaceExpression.LipCornerDepressorR);
     float lipStretch = Avg(OVRFaceExpressions.FaceExpression.LipStretcherL, OVRFaceExpressions.FaceExpression.LipStretcherR);
     float jawDrop = faceExpr[OVRFaceExpressions.FaceExpression.JawDrop];
+    float mouthLowerDown = Avg(OVRFaceExpressions.FaceExpression.LowerLipDepressorL, OVRFaceExpressions.FaceExpression.LowerLipDepressorR);
 
     //this order must match the template arrays at the top or the whole comparison is meaningless
-    return new[] {innerBrow, outerBrow, browLower, upperLid, cheekRaise, noseWrink, upperLip, smile, frown, lipStretch, jawDrop};
+    return new[] {innerBrow, outerBrow, browLower, upperLid, cheekRaise, noseWrink, upperLip, smile, frown, lipStretch, jawDrop, tighterLid, mouthPucker, mouthLowerDown};
   }
 
   private float ContemptCalculation(float pullL, float pullR, float maxAsymmetry)

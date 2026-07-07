@@ -1310,7 +1310,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::FaceEmotionClassifier
   faceExpr: {fileID: 2071057527}
   activeThreshold: 0.2
-  minSimilarity: 0.75
+  minSimilarity: 0.6
   contemptAsymmetry: 0.05
   windowFrames: 20
 --- !u!114 &2071057527

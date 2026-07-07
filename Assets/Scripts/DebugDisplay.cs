@@ -13,7 +13,7 @@ public class DebugDisplay : MonoBehaviour
             return;
 
         string output = "";
-        for (int i = 0; i < classifier.LastScores.Length; i++)
+        for (int i = 0; i < classifier.LastScores.Length - 1; i++)
         {
             output += $"{classifier.emotionNames[i]}: {classifier.LastScores[i]:F2}\n";
         }
