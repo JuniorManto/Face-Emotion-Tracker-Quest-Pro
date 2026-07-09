@@ -1,31 +1,41 @@
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
+using System;
+using System.Collections;
 using System.Collections.Generic;
 
-//updated for w7 ar overlay
-//previous version was just floating colored text which looked bad in passthrough
-//now theres a semi-transparent tinted panel behind the label that shifts color with the emotion
-//approach: script drives both Image.color on the panel and TextMeshProUGUI.color on the label
+//w7: previous version was just floating colored text which looked bad in passthrough
+//semi-transparent tinted panel behind the label that shifts color with the emotion
 //color-per-emotion pattern from semsioğlu & yantaç 2022 emote tool (ah2022)
+//w8: now shows both headsets at once, small YOU panel plus a bigger PARTNER panel since thats the actual point of the system
+//also shows confidence as a percent next to the label and falls back to a no signal state if the partner goes quiet
 public class EmotionDisplay:MonoBehaviour
 {
   [SerializeField] private FaceEmotionClassifier classifier;
 
-  //the tmp label that shows the emotion word
-  [SerializeField] private TextMeshProUGUI emotionLabel;
+  //your own emotion, small panel, always live off the local classifier no network involved
+  [SerializeField] private TextMeshProUGUI selfLabel;
+  [SerializeField] private Image selfPanel;
 
-  //the Image component on the panel background behind the text
-  //drag the panel gameobject (with Image component) in here in the inspector
-  [SerializeField] private Image backgroundPanel;
+  //partners emotion, bigger panel, comes over firebase
+  [SerializeField] private TextMeshProUGUI partnerLabel;
+  [SerializeField] private Image partnerPanel;
 
   public DatabaseManager databaseManager;
-  private string lastEmotion = "";
 
+  //written into directly by DatabaseManager.ReadCurrentPartnerEmotion
   public string currentPartnerEmotion = "Neutral";
+  public float currentPartnerConfidence = 0f;
+  public long currentPartnerTimestampMs = 0L;
 
-  //full brightness emotion colors for the text
-  //also used at 1/6 brightness for the panel tint so its the same hue but dark
+  //how long with no update before we call it a dropped connection instead of showing stale data
+  [SerializeField] private float signalTimeoutSeconds = 3f;
+
+  private string lastSelfShown = "";
+  private string lastPartnerShown = "";
+
+  //full brightness emotion colors for the text, also used at 1/4 brightness for the panel tint
   private static readonly Dictionary<string, Color32> emotionColors = new Dictionary<string, Color32>
   {
     {"Happiness", new Color32(255, 215,   0, 255)},
@@ -36,40 +46,97 @@ public class EmotionDisplay:MonoBehaviour
     {"Disgust",   new Color32( 68, 187,  68, 255)},
     {"Contempt",  new Color32(170, 170, 170, 255)},
     {"Neutral",   new Color32(200, 200, 200, 255)},
+    {"No Signal", new Color32( 90,  90,  90, 255)},
   };
 
   void Update()
   {
-    if(classifier == null || emotionLabel == null)
-      return;
-    
-    StartCoroutine(databaseManager.LogCurrentEmotion(classifier.CurrentEmotion));
-    StartCoroutine(databaseManager.ReadCurrentPartnerEmotion());
-
-    if(currentPartnerEmotion == lastEmotion)
+    if(classifier == null)
       return;
 
-    Color32 currentEmotionColor = emotionColors.ContainsKey(currentPartnerEmotion) ? emotionColors[currentPartnerEmotion] : new Color32(255, 255, 255, 255);
-    
-
-    //text gets the full saturated color
-    // emotionLabel.color = c;
-
-    //panel gets the same hue but dimmed to ~1/6 brightness at 80% opacity
-    //so it looks like a dark frosted card that tints the same color as the emotion
-    //update: /6 is a bit too dark, /4 might be better
-    if(backgroundPanel != null)
+    //still firing every frame like before, tested on device and the instant sync is worth keeping
+    if(databaseManager != null)
     {
-      backgroundPanel.color = new Color32(
-        (byte)(currentEmotionColor.r / 4),
-        (byte)(currentEmotionColor.g / 4),
-        (byte)(currentEmotionColor.b / 4),
+      StartCoroutine(databaseManager.LogCurrentEmotion(classifier.CurrentEmotion, classifier.CurrentConfidence));
+      StartCoroutine(databaseManager.ReadCurrentPartnerEmotion());
+    }
+
+    UpdateSelfPanel();
+    UpdatePartnerPanel();
+  }
+
+  //your own panel, small, driven straight off the local classifier no network round trip needed
+  private void UpdateSelfPanel()
+  {
+    if(selfLabel == null)
+      return;
+
+    string shown = $"{classifier.CurrentEmotion}:{Mathf.RoundToInt(classifier.CurrentConfidence * 100)}";
+    if(shown == lastSelfShown)
+      return;
+
+    Color32 c = emotionColors.ContainsKey(classifier.CurrentEmotion) ? emotionColors[classifier.CurrentEmotion] : new Color32(255, 255, 255, 255);
+    ApplyColor(selfPanel, c);
+    selfLabel.text = $"You: <color=#{ColorUtility.ToHtmlStringRGBA(c)}>{classifier.CurrentEmotion}</color> ({Mathf.RoundToInt(classifier.CurrentConfidence * 100)}%)";
+    lastSelfShown = shown;
+
+    StartCoroutine(FadeIn(selfPanel));
+  }
+
+  //partners panel, bigger, comes from firebase, falls back to no signal if the timestamp is too old
+  private void UpdatePartnerPanel()
+  {
+    if(partnerLabel == null)
+      return;
+
+    long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    bool signalLost = currentPartnerTimestampMs == 0 || (nowMs - currentPartnerTimestampMs) > signalTimeoutSeconds * 1000;
+
+    string displayEmotion = signalLost ? "No Signal" : currentPartnerEmotion;
+    string shown = signalLost ? "No Signal" : $"{currentPartnerEmotion}:{Mathf.RoundToInt(currentPartnerConfidence * 100)}";
+    if(shown == lastPartnerShown)
+      return;
+
+    Color32 c = emotionColors.ContainsKey(displayEmotion) ? emotionColors[displayEmotion] : new Color32(255, 255, 255, 255);
+    ApplyColor(partnerPanel, c);
+
+    partnerLabel.text = signalLost
+      ? $"Partner: <color=#{ColorUtility.ToHtmlStringRGBA(c)}>No Signal</color>"
+      : $"Partner: <color=#{ColorUtility.ToHtmlStringRGBA(c)}>{currentPartnerEmotion}</color> ({Mathf.RoundToInt(currentPartnerConfidence * 100)}%)";
+    lastPartnerShown = shown;
+
+    StartCoroutine(FadeIn(partnerPanel));
+  }
+
+  //panel gets the same hue but dimmed to ~1/4 brightness at 80% opacity so it looks like a dark frosted card
+  private void ApplyColor(Image panel, Color32 c)
+  {
+    if(panel != null)
+    {
+      panel.color = new Color32(
+        (byte)(c.r / 4),
+        (byte)(c.g / 4),
+        (byte)(c.b / 4),
         200
       );
     }
+  }
 
-    lastEmotion = currentPartnerEmotion;
+  //quick fade in on the panel whenever a label actually changes instead of just snapping to the new tint
+  private IEnumerator FadeIn(Image panel, float duration = 0.2f)
+  {
+    if(panel == null)
+      yield break;
 
-    emotionLabel.text = $"Current Emotion: <color=#{ColorUtility.ToHtmlStringRGBA(currentEmotionColor)}>{currentPartnerEmotion}</color>";
+    float t = 0f;
+    Color target = panel.color;
+    while(t < duration)
+    {
+      t += Time.deltaTime;
+      float alpha = Mathf.Clamp01(t / duration);
+      panel.color = new Color(target.r, target.g, target.b, target.a * alpha);
+      yield return null;
+    }
+    panel.color = target;
   }
 }

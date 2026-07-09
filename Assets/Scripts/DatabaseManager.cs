@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Globalization;
 using Firebase.Database;
 using UnityEngine;
@@ -37,13 +38,19 @@ public class DatabaseManager : MonoBehaviour
         
         Debug.Log("Happiness threshold is: " + snapshot.Value);
     }
-    
-    public IEnumerator LogCurrentEmotion(string text)
+
+    //now writes emotion, confidence, and a timestamp together instead of just the emotion string
+    public IEnumerator LogCurrentEmotion(string emotion, float confidence)
     {
-        var dbTask = _reference
-            .Child("currentEmotion2")
-            .SetValueAsync(text);
-        
+        var payload = new Dictionary<string, object>
+        {
+            {"emotion", emotion},
+            {"confidence", confidence},
+            {"timestamp", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}
+        };
+
+        var dbTask = _reference.Child("currentEmotion2").SetValueAsync(payload);
+
         yield return new WaitUntil(() => dbTask.IsCompleted);
 
         if (dbTask.Exception != null)
@@ -64,8 +71,18 @@ public class DatabaseManager : MonoBehaviour
         }
 
         DataSnapshot snapshot = dbTask.Result;
-        
-        emotionDisplay.currentPartnerEmotion = snapshot.Value.ToString();
+
+        //bail out quietly if the partner headset hasnt written anything at all yet
+        if (!snapshot.Exists)
+            yield break;
+
+        emotionDisplay.currentPartnerEmotion = snapshot.Child("emotion").Value?.ToString() ?? "Neutral";
+        emotionDisplay.currentPartnerConfidence = snapshot.Child("confidence").Value != null
+            ? Convert.ToSingle(snapshot.Child("confidence").Value)
+            : 0f;
+        emotionDisplay.currentPartnerTimestampMs = snapshot.Child("timestamp").Value != null
+            ? Convert.ToInt64(snapshot.Child("timestamp").Value)
+            : 0L;
     }
     
     private string GetTime()
