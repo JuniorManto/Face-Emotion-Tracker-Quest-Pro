@@ -29,12 +29,17 @@ public class FaceEmotionClassifier:MonoBehaviour
   //order has to match emotionNames below: Happiness, Sadness, Surprise, Fear, Anger, Disgust, Contempt, Neutral
   //last slot (Neutral) isnt actually used for scoring since neutral has no template of its own anymore, kept only so the array lines up with emotionNames for the debug display
   [SerializeField] private float[] thresholds =
-    { 0.70f, 0.55f, 0.70f, 0.55f, 0.50f, 0.50f, 0.80f, 1f };
+    { 0.75f, 0.65f, 0.70f, 0.55f, 0.55f, 0.60f, 0.9f, 0f };
 
   //second neutral condition, checked only if nothing cleared its own threshold above
   //the highest score among all 7 still has to be under this before we actually call it neutral
   //if nothing cleared but the highest score is still above this, treat it as an ambiguous expression instead of blank
-  [SerializeField] private float neutralCeiling = 0.3f;
+  [SerializeField] private float neutralCeiling = 0.5f;
+
+  //cosine similarity is blind to magnitude, a blank face full of tiny sensor noise still points in SOME templates direction and can score just as high as a real expression
+  //so before scoring anything, the strongest single muscle has to be above this floor, otherwise the face isnt actually doing anything and this frame scores zero across the board
+  //this is the check that actually catches a blank face, neutralCeiling alone never could because of that magnitude blindness
+  [SerializeField] private float minActivation = 0.15f;
 
   //for contempt, how lopsided the two lip corners have to be before i call it contempt
   [SerializeField] private float contemptAsymmetry = 0.12f;
@@ -101,18 +106,31 @@ public class FaceEmotionClassifier:MonoBehaviour
     //this frames raw score per emotion, not yet averaged
     //index 7 (neutral) stays 0 here since its not compared with cosine similarity anymore
     float[] rawScores = new float[8];
-    rawScores[0] = CosineSimilarity(face, happiness);
-    rawScores[1] = CosineSimilarity(face, sadness);
-    rawScores[2] = CosineSimilarity(face, surprise);
-    rawScores[3] = CosineSimilarity(face, fear);
-    rawScores[4] = CosineSimilarity(face, anger);
-    rawScores[5] = CosineSimilarity(face, disgust);
 
-    //contempt is the odd one out as its about one lip corner pulling way more than the other (asymmetry)
-    //cosine similarity cant really see that, so its checked directly here instead of template matching
-    rawScores[6] = ContemptCalculation(faceExpr[OVRFaceExpressions.FaceExpression.LipCornerPullerL],
-      faceExpr[OVRFaceExpressions.FaceExpression.LipCornerPullerR],
-      contemptAsymmetry);
+    //find the single strongest muscle this frame, this is the magnitude check cosine similarity cant do itself
+    float maxActivation = 0f;
+    for(int i = 0; i < face.Length; i++)
+      if(face[i] > maxActivation)
+        maxActivation = face[i];
+
+    //only score the face if its actually doing something
+    //if its below the floor, rawScores stay all zeros, the window average sinks toward zero over the next windowFrames frames, and the existing neutral fallback below fires on its own
+    if(maxActivation >= minActivation)
+    {
+      rawScores[0] = CosineSimilarity(face, happiness);
+      rawScores[1] = CosineSimilarity(face, sadness);
+      rawScores[2] = CosineSimilarity(face, surprise);
+      rawScores[3] = CosineSimilarity(face, fear);
+      rawScores[4] = CosineSimilarity(face, anger);
+      rawScores[5] = CosineSimilarity(face, disgust);
+
+      //contempt is the odd one out as its about one lip corner pulling way more than the other (asymmetry)
+      //cosine similarity cant really see that, so its checked directly here instead of template matching
+      //lives inside the gate too, a blank face shouldnt be able to score contempt off two tiny noise values disagreeing
+      rawScores[6] = ContemptCalculation(faceExpr[OVRFaceExpressions.FaceExpression.LipCornerPullerL],
+        faceExpr[OVRFaceExpressions.FaceExpression.LipCornerPullerR],
+        contemptAsymmetry);
+    }
 
     //slide the window: drop whatever was in this slot last time it was used, write the new value in its place
     //keeping runningSum updated this way means the average below is a simple divide, no re-looping over the window

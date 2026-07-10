@@ -10,10 +10,21 @@
       <meta-data android:name="com.oculus.vr.focusaware" android:value="true" />
     </activity>
     <meta-data android:name="unityplayer.SkipPermissionsDialog" android:value="false" />
-    <meta-data android:name="com.oculus.ossplash.background" android:value="black" />
-    <meta-data android:name="com.oculus.telemetry.project_guid" android:value="f2a3d3c3-6da1-47a6-87e7-5f1d352e1b43" />
-    <meta-data android:name="com.oculus.supportedDevices" android:value="quest|quest2|questpro|quest3|quest3s" tools:replace="android:value" />
+    <meta-data android:name="com.oculus.ossplash.background" android:value="passthrough-contextual" />
+    <meta-data android:name="com.oculus.telemetry.project_guid" android:value="5ff180d4-99bc-419a-bdc8-65bca50014c7" />
+    <meta-data android:name="com.oculus.supportedDevices" android:value="quest2|questpro|quest3|quest3s" tools:replace="android:value" />
+    <meta-data android:name="com.oculus.handtracking.frequency" android:value="LOW" />
   </application>
   <uses-feature android:name="android.hardware.vr.headtracking" android:version="1" android:required="true" />
   <horizonos:uses-horizonos-sdk horizonos:minSdkVersion="60" horizonos:targetSdkVersion="203" />
+  <uses-feature android:name="oculus.software.handtracking" android:required="false" />
+  <uses-permission android:name="com.oculus.permission.HAND_TRACKING" />
+  <uses-permission android:name="com.oculus.permission.USE_ANCHOR_API" />
+  <uses-feature android:name="com.oculus.feature.PASSTHROUGH" android:required="false" />
+  <uses-feature android:name="oculus.software.face_tracking" android:required="false" />
+  <uses-permission android:name="com.oculus.permission.FACE_TRACKING" />
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  <uses-feature android:name="oculus.software.eye_tracking" android:required="false" />
+  <uses-permission android:name="com.oculus.permission.EYE_TRACKING" />
+  <uses-permission android:name="com.oculus.permission.USE_SCENE" />
 </manifest>
