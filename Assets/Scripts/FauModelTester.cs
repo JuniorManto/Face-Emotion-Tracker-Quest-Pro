@@ -1,8 +1,11 @@
 //quick standalone test, does the trained mlp handle natural expressions better than cosine
-//not meant to be final code, just dumps raw scores to console so we can eyeball it
-//compare this against ScoreDebugPanel on the same natural expression, side by side
+//not meant to be final code, just shows the top emotion so we can eyeball it
+//compare this against DebugDisplay on the same natural expression, side by side
+//label order below was empirically calibrated by testing each expression one at a time
+//does not match emohevrdb's documented order, so dont trust the docs over this
 using UnityEngine;
 using Unity.InferenceEngine;
+using TMPro;
 
 public class FauModelTester : MonoBehaviour
 {
@@ -12,7 +15,12 @@ public class FauModelTester : MonoBehaviour
     //drag the gameobject that has OVRFaceExpressions on it here
     public OVRFaceExpressions faceExpressions;
 
-    public string[] emotionLabels = { "anger", "disgust", "fear", "happiness", "neutral", "sadness", "surprise" };
+    //drag a TMP text object here so we can read this on headset, not just editor console
+    public TMP_Text displayText;
+
+    //this order came from testing each face one at a time and noting which index fired
+    //not the order emohevrdb documents, that order was wrong for this exported model
+    public string[] emotionLabels = { "neutral", "happiness", "sadness", "surprise", "fear", "disgust", "anger" };
 
     Model runtimeModel;
     Worker worker;
@@ -30,8 +38,9 @@ public class FauModelTester : MonoBehaviour
         if (faceExpressions == null)
             return;
 
-        //pull the 63 fea floats straight off the headset
-        //same enum order emohevrdb was collected in since it comes from this same api
+        if (!faceExpressions.ValidExpressions)
+            return;
+
         for (int i = 0; i < 63; i++)
         {
             feaVector[i] = faceExpressions.GetWeight((OVRFaceExpressions.FaceExpression)i);
@@ -43,12 +52,29 @@ public class FauModelTester : MonoBehaviour
         Tensor<float> outputTensor = worker.PeekOutput() as Tensor<float>;
         float[] scores = outputTensor.DownloadToArray();
 
-        string line = "mlp scores: ";
+        int bestIndex = 0;
+        float bestScore = scores[0];
+        for (int i = 1; i < scores.Length; i++)
+        {
+            if (scores[i] > bestScore)
+            {
+                bestScore = scores[i];
+                bestIndex = i;
+            }
+        }
+
+        string bestLabel = bestIndex < emotionLabels.Length ? emotionLabels[bestIndex] : "unknown";
+        string verdict = bestLabel + " (" + bestScore.ToString("F2") + ")";
+
+        if (displayText != null)
+            displayText.text = verdict;
+
+        string fullBreakdown = "";
         for (int i = 0; i < scores.Length && i < emotionLabels.Length; i++)
         {
-            line += emotionLabels[i] + "=" + scores[i].ToString("F2") + " ";
+            fullBreakdown += emotionLabels[i] + "=" + scores[i].ToString("F2") + " ";
         }
-        Debug.Log(line);
+        Debug.Log("mlp verdict: " + verdict + " | full: " + fullBreakdown);
 
         inputTensor.Dispose();
     }
