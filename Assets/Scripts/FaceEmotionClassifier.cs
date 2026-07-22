@@ -6,6 +6,8 @@ using Unity.InferenceEngine;
 //trained on emohevrdb which only has 7 classes: neutral happiness sadness surprise fear disgust anger, no contempt
 //contempt is dropped for now, not being reported at all
 //verified the models real output order empirically on device since it didnt match what the dataset docs say
+//added ema smoothing plus a spike and hold display gate on top, CurrentEmotion stays raw for firebase sync
+//DisplayEmotion is the new one the ar overlay should actually read from
 public class FaceEmotionClassifier:MonoBehaviour
 {
   //this is the Meta component that gives the 63 FACS values
@@ -27,6 +29,22 @@ public class FaceEmotionClassifier:MonoBehaviour
 
   //raw scores this frame, no smoothing, matches what FauModelTester was already showing
   public float[] LastScores { get; private set; } = new float[8];
+
+  //how fast the ema reacts, higher means it follows the raw score more closely
+  [SerializeField] private float alpha = 0.3f;
+  //smoothed score has to clear this before we show anything on screen at all
+  [SerializeField] private float spikeThreshold = 0.85f;
+  //once triggered, how long the emotion stays locked on screen
+  [SerializeField] private float holdSeconds = 3f;
+
+  //smoothed version of LastScores, same 8 slot layout
+  float[] smoothedScores = new float[8];
+  bool holding = false;
+  float holdTimer = 0f;
+
+  //what the ar overlay should actually read, blank string means show nothing, not even neutral
+  public string DisplayEmotion { get; private set; } = "";
+  public float DisplayConfidence { get; private set; } = 0f;
 
   Model runtimeModel;
   Worker worker;
@@ -66,6 +84,7 @@ public class FaceEmotionClassifier:MonoBehaviour
     LastScores[7] = mlpScores[0]; //neutral
 
     //straight argmax, same as FauModelTester, no debounce
+    //this stays raw on purpose since firebase sync depends on it not lagging behind
     int best = 0;
     for(int i = 1; i < 8; i++)
     {
@@ -75,6 +94,49 @@ public class FaceEmotionClassifier:MonoBehaviour
     }
     CurrentEmotion = emotionNames[best];
     CurrentConfidence = LastScores[best];
+
+    //ema smoothing on every slot, same formula as the old cosine version just applied to mlp output now
+    for(int i = 0; i < 8; i++)
+      smoothedScores[i] = alpha * LastScores[i] + (1f - alpha) * smoothedScores[i];
+
+    UpdateDisplayGate();
+  }
+
+  //handles the spike and hold logic for DisplayEmotion, separate from the raw CurrentEmotion above
+  void UpdateDisplayGate()
+  {
+    if(holding)
+    {
+      holdTimer -= Time.deltaTime;
+      if(holdTimer <= 0f)
+      {
+        holding = false;
+        DisplayEmotion = "";
+        DisplayConfidence = 0f;
+      }
+      //while holding we dont even look for a new spike, if anger is already spiking its probably still anger
+      return;
+    }
+
+    //only slots 0 to 5 count, contempt(6) is always 0 and neutral(7) should never trigger a display
+    int spikeIndex = -1;
+    float spikeScore = 0f;
+    for(int i = 0; i < 6; i++)
+    {
+      if(smoothedScores[i] >= spikeThreshold && smoothedScores[i] > spikeScore)
+      {
+        spikeScore = smoothedScores[i];
+        spikeIndex = i;
+      }
+    }
+
+    if(spikeIndex != -1)
+    {
+      holding = true;
+      holdTimer = holdSeconds;
+      DisplayEmotion = emotionNames[spikeIndex];
+      DisplayConfidence = smoothedScores[spikeIndex];
+    }
   }
 
   private void OnDestroy()
