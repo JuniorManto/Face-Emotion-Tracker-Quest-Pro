@@ -10,6 +10,11 @@ using System.Collections.Generic;
 //color-per-emotion pattern from semsioğlu & yantaç 2022 emote tool (ah2022)
 //w8: now shows both headsets at once, small YOU panel plus a bigger PARTNER panel since thats the actual point of the system
 //also shows confidence as a percent next to the label and falls back to a no signal state if the partner goes quiet
+//w9: switched both panels from CurrentEmotion to DisplayEmotion
+//CurrentEmotion is the raw unsmoothed per frame argmax, thats what was causing the constant flicker
+//DisplayEmotion only has a value once a smoothed score clears spikeThreshold, held for holdSeconds, blank otherwise
+//blank means hide the panel completely, not fall back to neutral, thats the actual requirement
+//also switched the firebase write to send DisplayEmotion/DisplayConfidence instead of Current, so the partner sees the gated version too
 public class EmotionDisplay:MonoBehaviour
 {
   [SerializeField] private FaceEmotionClassifier classifier;
@@ -25,7 +30,8 @@ public class EmotionDisplay:MonoBehaviour
   public DatabaseManager databaseManager;
 
   //written into directly by DatabaseManager.ReadCurrentPartnerEmotion
-  public string currentPartnerEmotion = "Neutral";
+  //blank string here means the partner has no strong emotion triggering right now, same meaning as DisplayEmotion locally
+  public string currentPartnerEmotion = "";
   public float currentPartnerConfidence = 0f;
   public long currentPartnerTimestampMs = 0L;
 
@@ -49,15 +55,23 @@ public class EmotionDisplay:MonoBehaviour
     {"No Signal", new Color32( 90,  90,  90, 255)},
   };
 
+  void Start()
+  {
+    //start with nothing showing, dont rely on whatever state the panels happened to be left in in the editor
+    SetSelfVisible(false);
+    SetPartnerVisible(false);
+  }
+
   void Update()
   {
     if(classifier == null)
       return;
 
     //still firing every frame like before, tested on device and the instant sync is worth keeping
+    //now sending DisplayEmotion/DisplayConfidence so the partner sees the same gated, held value, not the raw flickering one
     if(databaseManager != null)
     {
-      StartCoroutine(databaseManager.LogCurrentEmotion(classifier.CurrentEmotion, classifier.CurrentConfidence));
+      StartCoroutine(databaseManager.LogCurrentEmotion(classifier.DisplayEmotion, classifier.DisplayConfidence));
       StartCoroutine(databaseManager.ReadCurrentPartnerEmotion());
     }
 
@@ -66,24 +80,38 @@ public class EmotionDisplay:MonoBehaviour
   }
 
   //your own panel, small, driven straight off the local classifier no network round trip needed
+  //hides completely when DisplayEmotion is blank instead of ever falling back to neutral
   private void UpdateSelfPanel()
   {
     if(selfLabel == null)
       return;
 
-    string shown = $"{classifier.CurrentEmotion}:{Mathf.RoundToInt(classifier.CurrentConfidence * 100)}";
+    if(string.IsNullOrEmpty(classifier.DisplayEmotion))
+    {
+      if(lastSelfShown == "")
+        return; //already hidden, nothing to do
+
+      SetSelfVisible(false);
+      lastSelfShown = "";
+      return;
+    }
+
+    string shown = $"{classifier.DisplayEmotion}:{Mathf.RoundToInt(classifier.DisplayConfidence * 100)}";
     if(shown == lastSelfShown)
       return;
 
-    Color32 c = emotionColors.ContainsKey(classifier.CurrentEmotion) ? emotionColors[classifier.CurrentEmotion] : new Color32(255, 255, 255, 255);
+    SetSelfVisible(true);
+
+    Color32 c = emotionColors.ContainsKey(classifier.DisplayEmotion) ? emotionColors[classifier.DisplayEmotion] : new Color32(255, 255, 255, 255);
     ApplyColor(selfPanel, c);
-    selfLabel.text = $"You: <color=#{ColorUtility.ToHtmlStringRGBA(c)}>{classifier.CurrentEmotion}</color> ({Mathf.RoundToInt(classifier.CurrentConfidence * 100)}%)";
+    selfLabel.text = $"You: <color=#{ColorUtility.ToHtmlStringRGBA(c)}>{classifier.DisplayEmotion}</color> ({Mathf.RoundToInt(classifier.DisplayConfidence * 100)}%)";
     lastSelfShown = shown;
 
     StartCoroutine(FadeIn(selfPanel));
   }
 
-  //partners panel, bigger, comes from firebase, falls back to no signal if the timestamp is too old
+  //partners panel, bigger, comes from firebase
+  //three states now, signal lost shows the no signal card, blank emotion hides the panel same as self, otherwise shows normally
   private void UpdatePartnerPanel()
   {
     if(partnerLabel == null)
@@ -92,20 +120,55 @@ public class EmotionDisplay:MonoBehaviour
     long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     bool signalLost = currentPartnerTimestampMs == 0 || (nowMs - currentPartnerTimestampMs) > signalTimeoutSeconds * 1000;
 
-    string displayEmotion = signalLost ? "No Signal" : currentPartnerEmotion;
-    string shown = signalLost ? "No Signal" : $"{currentPartnerEmotion}:{Mathf.RoundToInt(currentPartnerConfidence * 100)}";
+    if(signalLost)
+    {
+      if(lastPartnerShown == "No Signal")
+        return;
+
+      SetPartnerVisible(true);
+      Color32 c = emotionColors["No Signal"];
+      ApplyColor(partnerPanel, c);
+      partnerLabel.text = $"Partner: <color=#{ColorUtility.ToHtmlStringRGBA(c)}>No Signal</color>";
+      lastPartnerShown = "No Signal";
+      StartCoroutine(FadeIn(partnerPanel));
+      return;
+    }
+
+    if(string.IsNullOrEmpty(currentPartnerEmotion))
+    {
+      if(lastPartnerShown == "")
+        return; //already hidden
+
+      SetPartnerVisible(false);
+      lastPartnerShown = "";
+      return;
+    }
+
+    string shown = $"{currentPartnerEmotion}:{Mathf.RoundToInt(currentPartnerConfidence * 100)}";
     if(shown == lastPartnerShown)
       return;
 
-    Color32 c = emotionColors.ContainsKey(displayEmotion) ? emotionColors[displayEmotion] : new Color32(255, 255, 255, 255);
-    ApplyColor(partnerPanel, c);
+    SetPartnerVisible(true);
 
-    partnerLabel.text = signalLost
-      ? $"Partner: <color=#{ColorUtility.ToHtmlStringRGBA(c)}>No Signal</color>"
-      : $"Partner: <color=#{ColorUtility.ToHtmlStringRGBA(c)}>{currentPartnerEmotion}</color> ({Mathf.RoundToInt(currentPartnerConfidence * 100)}%)";
+    Color32 cc = emotionColors.ContainsKey(currentPartnerEmotion) ? emotionColors[currentPartnerEmotion] : new Color32(255, 255, 255, 255);
+    ApplyColor(partnerPanel, cc);
+    partnerLabel.text = $"Partner: <color=#{ColorUtility.ToHtmlStringRGBA(cc)}>{currentPartnerEmotion}</color> ({Mathf.RoundToInt(currentPartnerConfidence * 100)}%)";
     lastPartnerShown = shown;
 
     StartCoroutine(FadeIn(partnerPanel));
+  }
+
+  //toggles both the background panel and the label together, covers it either way whether the label is a child of the panel or a sibling
+  private void SetSelfVisible(bool visible)
+  {
+    if(selfPanel != null) selfPanel.gameObject.SetActive(visible);
+    if(selfLabel != null) selfLabel.gameObject.SetActive(visible);
+  }
+
+  private void SetPartnerVisible(bool visible)
+  {
+    if(partnerPanel != null) partnerPanel.gameObject.SetActive(visible);
+    if(partnerLabel != null) partnerLabel.gameObject.SetActive(visible);
   }
 
   //panel gets the same hue but dimmed to ~1/4 brightness at 80% opacity so it looks like a dark frosted card
