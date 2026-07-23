@@ -13,8 +13,9 @@ using System.Collections.Generic;
 //w9: switched both panels from CurrentEmotion to DisplayEmotion
 //CurrentEmotion is the raw unsmoothed per frame argmax, thats what was causing the constant flicker
 //DisplayEmotion only has a value once a smoothed score clears spikeThreshold, held for holdSeconds, blank otherwise
-//blank means hide the panel completely, not fall back to neutral, thats the actual requirement
-//also switched the firebase write to send DisplayEmotion/DisplayConfidence instead of Current, so the partner sees the gated version too
+//w9 pass 2: panels themselves now always stay visible as a background frame
+//only the label text and the color tint blank out when theres no strong emotion, panel background never disappears
+//idle state uses a neutral gray tint instead of any emotion color, so an empty panel doesnt look like "sadness" or whatever
 public class EmotionDisplay:MonoBehaviour
 {
   [SerializeField] private FaceEmotionClassifier classifier;
@@ -38,6 +39,9 @@ public class EmotionDisplay:MonoBehaviour
   //how long with no update before we call it a dropped connection instead of showing stale data
   [SerializeField] private float signalTimeoutSeconds = 3f;
 
+  //neutral gray tint for when theres nothing to show, not tied to any emotion so it doesnt read as a false signal
+  [SerializeField] private Color32 idleColor = new Color32(60, 60, 70, 160);
+
   private string lastSelfShown = "";
   private string lastPartnerShown = "";
 
@@ -57,9 +61,14 @@ public class EmotionDisplay:MonoBehaviour
 
   void Start()
   {
-    //start with nothing showing, dont rely on whatever state the panels happened to be left in in the editor
-    SetSelfVisible(false);
-    SetPartnerVisible(false);
+    //panels stay on screen the whole time now, only their contents change
+    if(selfPanel != null) selfPanel.gameObject.SetActive(true);
+    if(selfLabel != null) selfLabel.gameObject.SetActive(true);
+    if(partnerPanel != null) partnerPanel.gameObject.SetActive(true);
+    if(partnerLabel != null) partnerLabel.gameObject.SetActive(true);
+
+    SetSelfIdle();
+    SetPartnerIdle();
   }
 
   void Update()
@@ -68,7 +77,6 @@ public class EmotionDisplay:MonoBehaviour
       return;
 
     //still firing every frame like before, tested on device and the instant sync is worth keeping
-    //now sending DisplayEmotion/DisplayConfidence so the partner sees the same gated, held value, not the raw flickering one
     if(databaseManager != null)
     {
       StartCoroutine(databaseManager.LogCurrentEmotion(classifier.DisplayEmotion, classifier.DisplayConfidence));
@@ -80,7 +88,7 @@ public class EmotionDisplay:MonoBehaviour
   }
 
   //your own panel, small, driven straight off the local classifier no network round trip needed
-  //hides completely when DisplayEmotion is blank instead of ever falling back to neutral
+  //blank DisplayEmotion means empty label and idle tint, panel itself stays visible either way
   private void UpdateSelfPanel()
   {
     if(selfLabel == null)
@@ -89,9 +97,9 @@ public class EmotionDisplay:MonoBehaviour
     if(string.IsNullOrEmpty(classifier.DisplayEmotion))
     {
       if(lastSelfShown == "")
-        return; //already hidden, nothing to do
+        return; //already idle, nothing to do
 
-      SetSelfVisible(false);
+      SetSelfIdle();
       lastSelfShown = "";
       return;
     }
@@ -99,8 +107,6 @@ public class EmotionDisplay:MonoBehaviour
     string shown = $"{classifier.DisplayEmotion}:{Mathf.RoundToInt(classifier.DisplayConfidence * 100)}";
     if(shown == lastSelfShown)
       return;
-
-    SetSelfVisible(true);
 
     Color32 c = emotionColors.ContainsKey(classifier.DisplayEmotion) ? emotionColors[classifier.DisplayEmotion] : new Color32(255, 255, 255, 255);
     ApplyColor(selfPanel, c);
@@ -111,7 +117,7 @@ public class EmotionDisplay:MonoBehaviour
   }
 
   //partners panel, bigger, comes from firebase
-  //three states now, signal lost shows the no signal card, blank emotion hides the panel same as self, otherwise shows normally
+  //signal lost still shows the no signal text since thats actually informative, blank emotion goes idle same as self
   private void UpdatePartnerPanel()
   {
     if(partnerLabel == null)
@@ -125,7 +131,6 @@ public class EmotionDisplay:MonoBehaviour
       if(lastPartnerShown == "No Signal")
         return;
 
-      SetPartnerVisible(true);
       Color32 c = emotionColors["No Signal"];
       ApplyColor(partnerPanel, c);
       partnerLabel.text = $"Partner: <color=#{ColorUtility.ToHtmlStringRGBA(c)}>No Signal</color>";
@@ -137,9 +142,9 @@ public class EmotionDisplay:MonoBehaviour
     if(string.IsNullOrEmpty(currentPartnerEmotion))
     {
       if(lastPartnerShown == "")
-        return; //already hidden
+        return; //already idle
 
-      SetPartnerVisible(false);
+      SetPartnerIdle();
       lastPartnerShown = "";
       return;
     }
@@ -147,8 +152,6 @@ public class EmotionDisplay:MonoBehaviour
     string shown = $"{currentPartnerEmotion}:{Mathf.RoundToInt(currentPartnerConfidence * 100)}";
     if(shown == lastPartnerShown)
       return;
-
-    SetPartnerVisible(true);
 
     Color32 cc = emotionColors.ContainsKey(currentPartnerEmotion) ? emotionColors[currentPartnerEmotion] : new Color32(255, 255, 255, 255);
     ApplyColor(partnerPanel, cc);
@@ -158,31 +161,33 @@ public class EmotionDisplay:MonoBehaviour
     StartCoroutine(FadeIn(partnerPanel));
   }
 
-  //toggles both the background panel and the label together, covers it either way whether the label is a child of the panel or a sibling
-  private void SetSelfVisible(bool visible)
+  //blank label but keep the frame, panel just sits there dim and empty until the next real trigger
+  private void SetSelfIdle()
   {
-    if(selfPanel != null) selfPanel.gameObject.SetActive(visible);
-    if(selfLabel != null) selfLabel.gameObject.SetActive(visible);
+    if(selfLabel != null) selfLabel.text = "You: ";
+    ApplyColor(selfPanel, idleColor);
   }
 
-  private void SetPartnerVisible(bool visible)
+  private void SetPartnerIdle()
   {
-    if(partnerPanel != null) partnerPanel.gameObject.SetActive(visible);
-    if(partnerLabel != null) partnerLabel.gameObject.SetActive(visible);
+    if(partnerLabel != null) partnerLabel.text = "Partner: ";
+    ApplyColor(partnerPanel, idleColor);
   }
 
   //panel gets the same hue but dimmed to ~1/4 brightness at 80% opacity so it looks like a dark frosted card
+  //idleColor is passed straight through instead of divided since its already meant to be dim
   private void ApplyColor(Image panel, Color32 c)
   {
-    if(panel != null)
-    {
-      panel.color = new Color32(
-        (byte)(c.r / 4),
-        (byte)(c.g / 4),
-        (byte)(c.b / 4),
-        200
-      );
-    }
+    if(panel == null)
+      return;
+
+    bool isIdle = c.r == idleColor.r && c.g == idleColor.g && c.b == idleColor.b;
+    panel.color = isIdle ? (Color32)idleColor : new Color32(
+      (byte)(c.r / 4),
+      (byte)(c.g / 4),
+      (byte)(c.b / 4),
+      200
+    );
   }
 
   //quick fade in on the panel whenever a label actually changes instead of just snapping to the new tint

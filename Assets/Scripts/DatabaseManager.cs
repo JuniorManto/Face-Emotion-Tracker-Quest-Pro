@@ -10,12 +10,15 @@ public class DatabaseManager : MonoBehaviour
     private DatabaseReference _reference;
     public EmotionDisplay emotionDisplay;
 
-    //my slot number, 1 or 2, gets set once ClaimId finishes
-    //0 means not claimed yet, LogCurrentEmotion and ReadCurrentPartnerEmotion both check for this
     private int myId;
+    public int MyId => myId;
 
-    //the other headsets slot, just flips whatever mine is
     private int PartnerId => myId == 1 ? 2 : 1;
+
+    public int currentPartnerScore = 0;
+
+    //0 means not decided yet for this session, set by AssignRigging or ReadRigging
+    public int advantagedId = 0;
 
     private void Start()
     {
@@ -27,14 +30,11 @@ public class DatabaseManager : MonoBehaviour
         options.StorageBucket = "face-emotion-tracker.firebasestorage.app";
 
         var app = Firebase.FirebaseApp.Create(options);
-        _reference = FirebaseDatabase.GetInstance(app).RootReference;
+        _reference = FirebaseDatabase.GetInstance(app, "https://face-emotion-tracker-default-rtdb.firebaseio.com").RootReference;
 
         StartCoroutine(ClaimId());
     }
 
-    //claims a free slot under presence/1 or presence/2
-    //no integer counter anymore, whoevers slot exists under presence IS the online users
-    //the closure can run more than once if theres a write conflict, thats normal, claimedId just ends up matching whatever version actually commits
     private IEnumerator ClaimId()
     {
         var presenceRef = _reference.Child("presence");
@@ -54,7 +54,6 @@ public class DatabaseManager : MonoBehaviour
             }
             else
             {
-                //both slots taken, dont touch the data, bail below
                 claimedId = 0;
             }
 
@@ -79,7 +78,6 @@ public class DatabaseManager : MonoBehaviour
 
         Debug.Log($"claimed id {myId}");
 
-        //this is the part that actually works with this sdk, remove just my child if i disconnect for any reason, clean quit or not
         _reference.Child("presence").Child(myId.ToString()).OnDisconnect().RemoveValue();
     }
 
@@ -95,14 +93,11 @@ public class DatabaseManager : MonoBehaviour
         }
 
         DataSnapshot snapshot = dbTask.Result;
-        
         Debug.Log("Happiness threshold is: " + snapshot.Value);
     }
 
-    //now writes emotion, confidence, and a timestamp together instead of just the emotion string
     public IEnumerator LogCurrentEmotion(string emotion, float confidence)
     {
-        //id not claimed yet, skip this write instead of hitting currentEmotion0
         if (myId == 0)
             yield break;
 
@@ -122,10 +117,9 @@ public class DatabaseManager : MonoBehaviour
             Debug.LogError($"Firebase write failed: {dbTask.Exception}");
         }
     }
-    
+
     public IEnumerator ReadCurrentPartnerEmotion()
     {
-        //id not claimed yet, we dont know which slot is the partner so skip
         if (myId == 0)
             yield break;
 
@@ -140,7 +134,6 @@ public class DatabaseManager : MonoBehaviour
 
         DataSnapshot snapshot = dbTask.Result;
 
-        //bail out quietly if the partner headset hasnt written anything at all yet
         if (!snapshot.Exists)
             yield break;
 
@@ -152,7 +145,84 @@ public class DatabaseManager : MonoBehaviour
             ? Convert.ToInt64(snapshot.Child("timestamp").Value)
             : 0L;
     }
-    
+
+    public IEnumerator LogCurrentScore(int score)
+    {
+        if (myId == 0)
+            yield break;
+
+        var dbTask = _reference.Child("currentScore" + myId).SetValueAsync(score);
+
+        yield return new WaitUntil(() => dbTask.IsCompleted);
+
+        if (dbTask.Exception != null)
+        {
+            Debug.LogError($"Firebase score write failed: {dbTask.Exception}");
+        }
+    }
+
+    public IEnumerator ReadCurrentPartnerScore()
+    {
+        if (myId == 0)
+            yield break;
+
+        var dbTask = _reference.Child("currentScore" + PartnerId).GetValueAsync();
+        yield return new WaitUntil(() => dbTask.IsCompleted);
+
+        if (dbTask.Exception != null)
+        {
+            Debug.LogError(dbTask.Exception);
+            yield break;
+        }
+
+        DataSnapshot snapshot = dbTask.Result;
+
+        if (!snapshot.Exists)
+            yield break;
+
+        currentPartnerScore = snapshot.Value != null ? Convert.ToInt32(snapshot.Value) : 0;
+    }
+
+    //only the id 1 headset calls this, flips a coin and writes who gets the advantage this session
+    public IEnumerator AssignRigging()
+    {
+        if (myId != 1)
+            yield break;
+
+        int winner = UnityEngine.Random.value < 0.5f ? 1 : 2;
+
+        var dbTask = _reference.Child("rigging").Child("advantagedId").SetValueAsync(winner);
+        yield return new WaitUntil(() => dbTask.IsCompleted);
+
+        if (dbTask.Exception != null)
+        {
+            Debug.LogError($"rigging assign failed: {dbTask.Exception}");
+            yield break;
+        }
+
+        advantagedId = winner;
+    }
+
+    //id 2 cant know the result until id 1 writes it, so this just polls
+    public IEnumerator ReadRigging()
+    {
+        var dbTask = _reference.Child("rigging").Child("advantagedId").GetValueAsync();
+        yield return new WaitUntil(() => dbTask.IsCompleted);
+
+        if (dbTask.Exception != null)
+        {
+            Debug.LogError(dbTask.Exception);
+            yield break;
+        }
+
+        DataSnapshot snapshot = dbTask.Result;
+
+        if (!snapshot.Exists)
+            yield break;
+
+        advantagedId = Convert.ToInt32(snapshot.Value);
+    }
+
     private string GetTime()
     {
         return DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss", CultureInfo.InvariantCulture);

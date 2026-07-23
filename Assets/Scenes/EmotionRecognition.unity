@@ -1122,6 +1122,7 @@ GameObject:
   - component: {fileID: 810015773}
   - component: {fileID: 810015776}
   - component: {fileID: 810015775}
+  - component: {fileID: 810015777}
   m_Layer: 0
   m_Name: PianoTiles
   m_TagString: Untagged
@@ -1148,27 +1149,29 @@ MonoBehaviour:
   rightHitLine: {fileID: 473285787}
   tileHeight: 0.3
   tileWidth: 0.3
-  fallTimeSeconds: 2.5
-  fallTimeReductionPerPoint: 0.08
-  minFallTimeSeconds: 0.8
+  fallTimeSeconds: 0.3
+  fallTimeReductionPerPoint: 0
+  minFallTimeSeconds: 0.4
+  difficultyStepsBackOnMiss: 5
   hitWindowPercent: 1
   triggerPressThreshold: 0.5
-  hitHoldSeconds: 0.6
+  hitHoldSeconds: 1
   penaltySeconds: 2
   gameDurationSeconds: 120
+  warmupSeconds: 2
   leftLaneColor: {r: 0.2, g: 0.6, b: 1, a: 1}
-  rightLaneColor: {r: 1, g: 0.55, b: 0.1, a: 1}
-  hitLineColor: {r: 0.2, g: 1, b: 0.3, a: 1}
-  boardColor: {r: 0.05, g: 0.05, b: 0.08, a: 1}
+  rightLaneColor: {r: 0, g: 1, b: 0, a: 1}
+  hitLineColor: {r: 1, g: 0, b: 0, a: 1}
+  boardColor: {r: 0.9921569, g: 0.9607844, b: 0.9019608, a: 1}
   outlineColor: {r: 0, g: 0, b: 0, a: 1}
-  borderPadding: 0.025
-  railThickness: 0.03
+  borderPadding: 0.001
+  railThickness: 0.01
   boardMargin: 0.15
   cardCornerRadiusFrac: 0.22
   boardCornerRadiusFrac: 0.08
   cardTextureRes: 96
   boardTextureRes: 256
-  hitLineGlowSize: 0.18
+  hitLineGlowSize: 0.05
   hitLineGlowAlpha: 0.45
   scoreText: {fileID: 0}
   pointPopup: {fileID: 1936024186}
@@ -1222,6 +1225,23 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ScoreSync
   game: {fileID: 810015773}
+  databaseManager: {fileID: 1155793700}
+--- !u!114 &810015777
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 810015772}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e96cc05f35f14544296b2d70f700d7cb, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::RiggingSetup
+  databaseManager: {fileID: 1155793700}
+  game: {fileID: 810015773}
+  advantagedPercent: 1.25
+  disadvantagedPercent: 0.65
 --- !u!1 &832575517
 GameObject:
   m_ObjectHideFlags: 0
@@ -1808,6 +1828,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::DatabaseManager
   emotionDisplay: {fileID: 2071057525}
+  currentPartnerScore: 0
+  advantagedId: 0
 --- !u!4 &1155793701
 Transform:
   m_ObjectHideFlags: 0
@@ -2539,6 +2561,9 @@ MonoBehaviour:
   currentPartnerConfidence: 0
   currentPartnerTimestampMs: 0
   signalTimeoutSeconds: 3
+  idleColor:
+    serializedVersion: 2
+    rgba: 2688957500
 --- !u!114 &2071057526
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2554,7 +2579,7 @@ MonoBehaviour:
   faceExpr: {fileID: 2071057527}
   modelAsset: {fileID: 5022602860645237092, guid: 16ff3a6306230ca42a80638f8c53c01c, type: 3}
   alpha: 0.3
-  spikeThreshold: 0.85
+  spikeThreshold: 0.5
   holdSeconds: 3
 --- !u!114 &2071057527
 MonoBehaviour:

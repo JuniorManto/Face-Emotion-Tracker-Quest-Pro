@@ -1,21 +1,10 @@
 using UnityEngine;
 using TMPro;
 
-//piano tiles style minigame for the pilot study, each headset runs its own local instance of this
-//two lanes only since we only have two triggers, left trigger and right trigger
-//only one tile is ever active at a time, randomized which lane it spawns in
-//on a hit or miss the tile freezes in place, a popup shows, then after a short hold the next tile spawns
-//pulling the wrong side trigger while a tile is active also counts as a miss, thats what stops mashing both
-//hit window size is the rigging knob, set hitWindowPercent lower on the headset thats supposed to be disadvantaged
-//this only handles the game itself, not synced to firebase yet, thats the next step after this
-//reads raw axis and does our own edge detection instead of relying on Button.PrimaryIndexTrigger, confirmed working
-//w9 visual pass: replaced flat solid color cubes with runtime generated rounded rect textures
-//rounded corners, a glossy top to bottom gradient, and a darker border of the same hue instead of a flat block of color
-//still using Cube primitives on purpose, not Quads, cubes stay visible from any angle so this cant go invisible on us
 public class PianoTileGame:MonoBehaviour
 {
   public Transform centerEyeTransform;
-  
+
   [Header("lane setup, drag empty transforms in for these")]
   [SerializeField] private Transform leftSpawnPoint;
   [SerializeField] private Transform rightSpawnPoint;
@@ -24,11 +13,12 @@ public class PianoTileGame:MonoBehaviour
 
   [Header("tile settings")]
   [SerializeField] private float tileHeight = 0.3f;
-  [SerializeField] private float tileWidth = 0.3f;
+  [SerializeField] private float tileWidth = 0.25f;
   [SerializeField] private float fallTimeSeconds = 3.5f;
-  //bumped up from 0.02 since it was basically imperceptible before, this is the "slightly" ramp mo asked for
   [SerializeField] private float fallTimeReductionPerPoint = 0.06f;
   [SerializeField] private float minFallTimeSeconds = 1f;
+
+  [SerializeField] private int difficultyStepsBackOnMiss = 2;
 
   [Header("hit window, this is the rigging knob")]
   [Range(0.1f, 1.5f)]
@@ -42,29 +32,25 @@ public class PianoTileGame:MonoBehaviour
 
   [Header("timer")]
   [SerializeField] private float gameDurationSeconds = 120f;
+  [SerializeField] private float warmupSeconds = 0.4f;
 
   [Header("visuals, neon arcade palette")]
-  [SerializeField] private Color leftLaneColor = new Color(0.1f, 0.9f, 0.95f);
-  [SerializeField] private Color rightLaneColor = new Color(1f, 0.15f, 0.6f);
+  [SerializeField] private Color leftLaneColor = new Color(0.15f, 0.45f, 0.95f);
+  [SerializeField] private Color rightLaneColor = new Color(0.25f, 0.85f, 0.35f);
   [SerializeField] private Color hitLineColor = new Color(1f, 0.85f, 0.15f);
   [SerializeField] private Color boardColor = new Color(0.04f, 0.03f, 0.1f);
-  //kept from before, now doubles as the boards border tint instead of pure black, softer look
   [SerializeField] private Color outlineColor = new Color(0.25f, 0.2f, 0.42f);
-  //kept from before, now used as border thickness in world units for every card, converted to pixels internally
   [SerializeField] private float borderPadding = 0.025f;
-  [SerializeField] private float railThickness = 0.03f;
+  [SerializeField] private float railThickness = 0.022f;
   [SerializeField] private float boardMargin = 0.15f;
 
   [Header("visuals, rounding and glow")]
-  //fraction of the smaller texture dimension, higher is more rounded
   [Range(0.05f, 0.4f)]
   [SerializeField] private float cardCornerRadiusFrac = 0.22f;
   [Range(0.02f, 0.3f)]
   [SerializeField] private float boardCornerRadiusFrac = 0.08f;
-  //texture resolution for small cards vs the big board, higher looks smoother but costs a bit more at startup only
   [SerializeField] private int cardTextureRes = 96;
   [SerializeField] private int boardTextureRes = 256;
-  //soft halo behind the hit line so it actually reads as "the important one", world units for how far it extends
   [SerializeField] private float hitLineGlowSize = 0.18f;
   [Range(0f, 1f)]
   [SerializeField] private float hitLineGlowAlpha = 0.45f;
@@ -83,9 +69,12 @@ public class PianoTileGame:MonoBehaviour
   public bool InPenalty { get; private set; } = false;
   public bool InHitHold { get; private set; } = false;
 
+  int difficultyLevel = 0;
+
   GameObject activeTile;
   int activeLane = -1;
   float holdTimer;
+  float warmupTimer;
 
   float prevLeftAxis = 0f;
   float prevRightAxis = 0f;
@@ -95,7 +84,8 @@ public class PianoTileGame:MonoBehaviour
   void Start()
   {
     TimeRemaining = gameDurationSeconds;
-    GameActive = true;
+    GameActive = false;
+    warmupTimer = warmupSeconds;
 
     if(pointPopup != null) pointPopup.SetActive(false);
     if(penaltyPopup != null) penaltyPopup.SetActive(false);
@@ -109,6 +99,14 @@ public class PianoTileGame:MonoBehaviour
   void Update()
   {
     ReadTriggers();
+
+    if(warmupTimer > 0f)
+    {
+      warmupTimer -= Time.deltaTime;
+      if(warmupTimer <= 0f)
+        GameActive = true;
+      return;
+    }
 
     if(!GameActive)
       return;
@@ -128,7 +126,6 @@ public class PianoTileGame:MonoBehaviour
       {
         InPenalty = false;
         if(penaltyPopup != null) penaltyPopup.SetActive(false);
-        ClearActiveTile();
       }
       return;
     }
@@ -140,7 +137,6 @@ public class PianoTileGame:MonoBehaviour
       {
         InHitHold = false;
         if(pointPopup != null) pointPopup.SetActive(false);
-        ClearActiveTile();
       }
       return;
     }
@@ -183,7 +179,7 @@ public class PianoTileGame:MonoBehaviour
     Transform hitLine = activeLane == 0 ? leftHitLine : rightHitLine;
 
     float totalDistance = spawnPoint.position.y - hitLine.position.y;
-    float effectiveFallTime = Mathf.Max(minFallTimeSeconds, fallTimeSeconds - Score * fallTimeReductionPerPoint);
+    float effectiveFallTime = Mathf.Max(minFallTimeSeconds, fallTimeSeconds - difficultyLevel * fallTimeReductionPerPoint);
     float speed = totalDistance / effectiveFallTime;
 
     activeTile.transform.localPosition += Vector3.down * speed * Time.deltaTime;
@@ -210,7 +206,9 @@ public class PianoTileGame:MonoBehaviour
   void ResolveHit()
   {
     Score++;
+    difficultyLevel++;
     UpdateScoreText();
+    ClearActiveTile();
     InHitHold = true;
     holdTimer = hitHoldSeconds;
     if(pointPopup != null) pointPopup.SetActive(true);
@@ -218,6 +216,8 @@ public class PianoTileGame:MonoBehaviour
 
   void ResolveMiss()
   {
+    difficultyLevel = Mathf.Max(0, difficultyLevel - difficultyStepsBackOnMiss);
+    ClearActiveTile();
     InPenalty = true;
     holdTimer = penaltySeconds;
     if(penaltyPopup != null) penaltyPopup.SetActive(true);
@@ -237,7 +237,12 @@ public class PianoTileGame:MonoBehaviour
       scoreText.text = "Score: " + Score;
   }
 
-  //tile is now a rounded card, fill = lane color, border = a darker shade of the same color, not black
+  //lets RiggingSetup override the inspector value at runtime once the coin flip result is known
+  public void SetHitWindowPercent(float percent)
+  {
+    hitWindowPercent = percent;
+  }
+
   GameObject SpawnTile(Transform spawnPoint, Color laneColor)
   {
     Color border = laneColor * 0.4f;
@@ -245,14 +250,12 @@ public class PianoTileGame:MonoBehaviour
     return CreateCard(spawnPoint.position, tileWidth, tileHeight, 0.05f, laneColor, border, cardCornerRadiusFrac, cardTextureRes);
   }
 
-  //bright white rounded flash on a good hit, brief burst, cleans itself up
   void SpawnFlash(Vector3 pos)
   {
     GameObject flash = CreateCard(pos, tileWidth * 1.4f, tileHeight * 1.4f, 0.06f, Color.white, new Color(0.85f, 0.85f, 0.85f), cardCornerRadiusFrac, cardTextureRes);
     Destroy(flash, 0.15f);
   }
 
-  //dark backdrop panel spanning both lanes, rounded corners and a soft indigo border ring instead of a flat black slab
   void BuildBoard()
   {
     float minX = Mathf.Min(leftSpawnPoint.position.x, rightSpawnPoint.position.x) - tileWidth / 2f - boardMargin;
@@ -272,7 +275,6 @@ public class PianoTileGame:MonoBehaviour
     CreateCard(new Vector3(dividerX, centerY, z - 0.02f), railThickness * 1.5f, height, railThickness, outlineColor, outlineColor * 0.6f, 0.4f, 32);
   }
 
-  //rails plus the hit line, hit line now gets a soft glowing halo behind it so it clearly reads as the important boundary
   void BuildLaneVisuals(Transform spawnPoint, Transform hitLine, Color laneColor)
   {
     float topY = spawnPoint.position.y + tileHeight;
@@ -288,7 +290,6 @@ public class PianoTileGame:MonoBehaviour
     CreateCard(leftRailPos, railThickness, railLength, railThickness, laneColor, railBorder, 0.4f, 32);
     CreateCard(rightRailPos, railThickness, railLength, railThickness, laneColor, railBorder, 0.4f, 32);
 
-    //soft halo sits slightly behind the crisp bar, bigger and low opacity so it reads as a glow not a second bar
     Color glow = hitLineColor;
     glow.a = hitLineGlowAlpha;
     CreateGlow(hitLine.position + Vector3.back * 0.01f, tileWidth + railThickness * 2f + hitLineGlowSize, hitLineGlowSize, glow);
@@ -298,7 +299,6 @@ public class PianoTileGame:MonoBehaviour
     CreateCard(hitLine.position, tileWidth + railThickness * 2f, railThickness * 2.5f, railThickness, hitLineColor, lineBorder, 0.45f, 48);
   }
 
-  //rounded rect card with a border and a subtle glossy top-to-bottom gradient, this is the main visual building block now
   GameObject CreateCard(Vector3 pos, float worldWidth, float worldHeight, float zThickness, Color fill, Color border, float cornerRadiusFrac, int texRes)
   {
     int texWidth = texRes;
@@ -318,7 +318,6 @@ public class PianoTileGame:MonoBehaviour
     return go;
   }
 
-  //soft vertical falloff glow, used behind the hit line, alpha fades out toward the top and bottom edges
   GameObject CreateGlow(Vector3 pos, float worldWidth, float worldHeight, Color glowColor)
   {
     Texture2D tex = MakeGlowTexture(16, 64, glowColor);
@@ -332,8 +331,6 @@ public class PianoTileGame:MonoBehaviour
     return go;
   }
 
-  //standard rounded box signed distance function, inigo quilez formula
-  //returns negative inside the shape, 0 right on the edge, positive outside, used to draw and antialias the rounded rect
   float RoundedBoxSDF(Vector2 p, Vector2 halfSize, float radius)
   {
     Vector2 q = new Vector2(Mathf.Abs(p.x) - halfSize.x + radius, Mathf.Abs(p.y) - halfSize.y + radius);
@@ -342,7 +339,6 @@ public class PianoTileGame:MonoBehaviour
     return outside + inside - radius;
   }
 
-  //builds the actual rounded rect texture, fill inside a darker border ring, plus a subtle top-lighter bottom-darker gradient
   Texture2D MakeCardTexture(int texWidth, int texHeight, Color fill, Color border, int cornerPx, int borderPx)
   {
     Texture2D tex = new Texture2D(texWidth, texHeight, TextureFormat.RGBA32, false);
@@ -352,7 +348,7 @@ public class PianoTileGame:MonoBehaviour
 
     for(int y = 0; y < texHeight; y++)
     {
-      float t = (float)y / texHeight; //0 bottom to 1 top
+      float t = (float)y / texHeight;
       Color gradFill = Color.Lerp(fill * 0.85f, fill * 1.15f, t);
       gradFill.a = fill.a;
       gradFill.r = Mathf.Clamp01(gradFill.r);
@@ -380,7 +376,6 @@ public class PianoTileGame:MonoBehaviour
     return tex;
   }
 
-  //soft vertical glow, opaque center fading to transparent top and bottom, used behind the hit line
   Texture2D MakeGlowTexture(int texWidth, int texHeight, Color glowColor)
   {
     Texture2D tex = new Texture2D(texWidth, texHeight, TextureFormat.RGBA32, false);
@@ -401,7 +396,6 @@ public class PianoTileGame:MonoBehaviour
     return tex;
   }
 
-  //sprites/default is alpha blended by default and ships with basically every unity project, safest choice for transparency
   Material MakeTexturedMaterial(Texture2D tex)
   {
     Shader shader = Shader.Find("Sprites/Default");
@@ -410,7 +404,7 @@ public class PianoTileGame:MonoBehaviour
 
     Material mat = new Material(shader);
     mat.mainTexture = tex;
-    mat.color = Color.white; //color already baked into the texture, dont double tint
+    mat.color = Color.white;
     return mat;
   }
 }
