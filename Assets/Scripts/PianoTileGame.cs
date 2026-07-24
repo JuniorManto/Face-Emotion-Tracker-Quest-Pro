@@ -1,9 +1,29 @@
 using UnityEngine;
 using TMPro;
 
+//piano tiles style minigame for the pilot study, each headset runs its own local instance of this
+//two lanes only since we only have two triggers, left trigger and right trigger
+//only one tile is ever active at a time, randomized which lane it spawns in
+//on a hit or miss the tile freezes in place, a popup shows, then after a short hold the next tile spawns
+//pulling the wrong side trigger while a tile is active also counts as a miss, thats what stops mashing both
+//hit window size is the rigging knob, RiggingSetup.cs calls SetHitWindowPercent at runtime once it knows who's advantaged
+//score sync lives in ScoreDisplay.cs now, reads DatabaseManager directly
+//game doesnt start until dbManager says both players have claimed a presence slot
+//restart is synced too, pulling a trigger on game over just signals im ready, actual restart waits for both players
+//triggers read raw axis with our own edge detection, GetDown on the button enum wasnt registering at all
 public class PianoTileGame:MonoBehaviour
 {
-  public Transform centerEyeTransform;
+  [Header("presence gate")]
+  [SerializeField] private DatabaseManager dbManager;
+  [SerializeField] private TextMeshProUGUI waitingForPartnerText;
+
+  [Header("game over / restart, build this panel yourself")]
+  [SerializeField] private GameObject gameOverPanel;
+  [SerializeField] private TextMeshProUGUI finalScoreText;
+  [SerializeField] private TextMeshProUGUI restartPromptText;
+
+  [Header("timer display")]
+  [SerializeField] private TextMeshProUGUI timerText;
 
   [Header("lane setup, drag empty transforms in for these")]
   [SerializeField] private Transform leftSpawnPoint;
@@ -13,12 +33,10 @@ public class PianoTileGame:MonoBehaviour
 
   [Header("tile settings")]
   [SerializeField] private float tileHeight = 0.3f;
-  [SerializeField] private float tileWidth = 0.25f;
+  [SerializeField] private float tileWidth = 0.3f;
   [SerializeField] private float fallTimeSeconds = 3.5f;
   [SerializeField] private float fallTimeReductionPerPoint = 0.06f;
   [SerializeField] private float minFallTimeSeconds = 1f;
-
-  [SerializeField] private int difficultyStepsBackOnMiss = 2;
 
   [Header("hit window, this is the rigging knob")]
   [Range(0.1f, 1.5f)]
@@ -32,31 +50,18 @@ public class PianoTileGame:MonoBehaviour
 
   [Header("timer")]
   [SerializeField] private float gameDurationSeconds = 120f;
-  [SerializeField] private float warmupSeconds = 0.4f;
 
   [Header("visuals, neon arcade palette")]
-  [SerializeField] private Color leftLaneColor = new Color(0.15f, 0.45f, 0.95f);
-  [SerializeField] private Color rightLaneColor = new Color(0.25f, 0.85f, 0.35f);
+  [SerializeField] private Color leftLaneColor = new Color(0.1f, 0.9f, 0.95f);
+  [SerializeField] private Color rightLaneColor = new Color(1f, 0.15f, 0.6f);
   [SerializeField] private Color hitLineColor = new Color(1f, 0.85f, 0.15f);
   [SerializeField] private Color boardColor = new Color(0.04f, 0.03f, 0.1f);
-  [SerializeField] private Color outlineColor = new Color(0.25f, 0.2f, 0.42f);
+  [SerializeField] private Color outlineColor = new Color(0f, 0f, 0f);
   [SerializeField] private float borderPadding = 0.025f;
-  [SerializeField] private float railThickness = 0.022f;
+  [SerializeField] private float railThickness = 0.03f;
   [SerializeField] private float boardMargin = 0.15f;
 
-  [Header("visuals, rounding and glow")]
-  [Range(0.05f, 0.4f)]
-  [SerializeField] private float cardCornerRadiusFrac = 0.22f;
-  [Range(0.02f, 0.3f)]
-  [SerializeField] private float boardCornerRadiusFrac = 0.08f;
-  [SerializeField] private int cardTextureRes = 96;
-  [SerializeField] private int boardTextureRes = 256;
-  [SerializeField] private float hitLineGlowSize = 0.18f;
-  [Range(0f, 1f)]
-  [SerializeField] private float hitLineGlowAlpha = 0.45f;
-
   [Header("ui, build these yourself on a canvas then drag them in")]
-  [SerializeField] private TextMeshProUGUI scoreText;
   [SerializeField] private GameObject pointPopup;
   [SerializeField] private GameObject penaltyPopup;
 
@@ -69,27 +74,33 @@ public class PianoTileGame:MonoBehaviour
   public bool InPenalty { get; private set; } = false;
   public bool InHitHold { get; private set; } = false;
 
-  int difficultyLevel = 0;
+  bool hasStarted = false;
+  bool myRestartRequested = false;
 
   GameObject activeTile;
   int activeLane = -1;
   float holdTimer;
-  float warmupTimer;
 
   float prevLeftAxis = 0f;
   float prevRightAxis = 0f;
   bool leftJustPulled = false;
   bool rightJustPulled = false;
 
+  public void SetHitWindowPercent(float percent)
+  {
+    hitWindowPercent = percent;
+  }
+
   void Start()
   {
-    TimeRemaining = gameDurationSeconds;
-    GameActive = false;
-    warmupTimer = warmupSeconds;
+    if(waitingForPartnerText != null)
+      waitingForPartnerText.gameObject.SetActive(true);
 
     if(pointPopup != null) pointPopup.SetActive(false);
     if(penaltyPopup != null) penaltyPopup.SetActive(false);
-    UpdateScoreText();
+    if(gameOverPanel != null) gameOverPanel.SetActive(false);
+
+    UpdateTimerText();
 
     BuildBoard();
     BuildLaneVisuals(leftSpawnPoint, leftHitLine, leftLaneColor);
@@ -100,22 +111,34 @@ public class PianoTileGame:MonoBehaviour
   {
     ReadTriggers();
 
-    if(warmupTimer > 0f)
+    if(!GameActive)
     {
-      warmupTimer -= Time.deltaTime;
-      if(warmupTimer <= 0f)
-        GameActive = true;
+      if(!hasStarted)
+      {
+        if(dbManager != null && dbManager.BothPlayersPresent)
+          StartRound();
+        return;
+      }
+
+      HandleGameOverState();
       return;
     }
 
-    if(!GameActive)
-      return;
-
     TimeRemaining -= Time.deltaTime;
+    UpdateTimerText();
+
     if(TimeRemaining <= 0f)
     {
       TimeRemaining = 0f;
+      UpdateTimerText();
       GameActive = false;
+      myRestartRequested = false;
+      if(finalScoreText != null)
+        finalScoreText.text = "Final Score: " + Score;
+      if(restartPromptText != null)
+        restartPromptText.text = "Press either trigger to play again";
+      if(gameOverPanel != null)
+        gameOverPanel.SetActive(true);
       return;
     }
 
@@ -126,6 +149,7 @@ public class PianoTileGame:MonoBehaviour
       {
         InPenalty = false;
         if(penaltyPopup != null) penaltyPopup.SetActive(false);
+        ClearActiveTile();
       }
       return;
     }
@@ -137,6 +161,7 @@ public class PianoTileGame:MonoBehaviour
       {
         InHitHold = false;
         if(pointPopup != null) pointPopup.SetActive(false);
+        ClearActiveTile();
       }
       return;
     }
@@ -148,6 +173,60 @@ public class PianoTileGame:MonoBehaviour
     }
 
     MoveAndCheckActiveTile();
+  }
+
+  //formats TimeRemaining as m:ss, ceil so it doesnt flash to 0:00 a frame early
+  void UpdateTimerText()
+  {
+    if(timerText == null)
+      return;
+
+    int totalSeconds = Mathf.CeilToInt(TimeRemaining);
+    int minutes = totalSeconds / 60;
+    int seconds = totalSeconds % 60;
+    timerText.text = $"{minutes}:{seconds:00}";
+  }
+
+  void HandleGameOverState()
+  {
+    if(dbManager == null)
+      return;
+
+    if(!myRestartRequested)
+    {
+      if(leftJustPulled || rightJustPulled)
+      {
+        myRestartRequested = true;
+        StartCoroutine(dbManager.RequestRestart());
+        if(restartPromptText != null)
+          restartPromptText.text = "Waiting for partner...";
+      }
+      return;
+    }
+
+    if(dbManager.BothPlayersReadyToRestart)
+    {
+      StartCoroutine(dbManager.ClearMyRestartReady());
+      myRestartRequested = false;
+      StartRound();
+    }
+  }
+
+  void StartRound()
+  {
+    GameActive = true;
+    hasStarted = true;
+    Score = 0;
+    TimeRemaining = gameDurationSeconds;
+    InPenalty = false;
+    InHitHold = false;
+    ClearActiveTile();
+    UpdateTimerText();
+
+    if(waitingForPartnerText != null) waitingForPartnerText.gameObject.SetActive(false);
+    if(gameOverPanel != null) gameOverPanel.SetActive(false);
+    if(pointPopup != null) pointPopup.SetActive(false);
+    if(penaltyPopup != null) penaltyPopup.SetActive(false);
   }
 
   void ReadTriggers()
@@ -179,10 +258,10 @@ public class PianoTileGame:MonoBehaviour
     Transform hitLine = activeLane == 0 ? leftHitLine : rightHitLine;
 
     float totalDistance = spawnPoint.position.y - hitLine.position.y;
-    float effectiveFallTime = Mathf.Max(minFallTimeSeconds, fallTimeSeconds - difficultyLevel * fallTimeReductionPerPoint);
+    float effectiveFallTime = Mathf.Max(minFallTimeSeconds, fallTimeSeconds - Score * fallTimeReductionPerPoint);
     float speed = totalDistance / effectiveFallTime;
 
-    activeTile.transform.localPosition += Vector3.down * speed * Time.deltaTime;
+    activeTile.transform.position += Vector3.down * speed * Time.deltaTime;
 
     float distanceFromLine = Mathf.Abs(activeTile.transform.position.y - hitLine.position.y);
     float windowRadius = (tileHeight / 2f) * hitWindowPercent;
@@ -206,9 +285,6 @@ public class PianoTileGame:MonoBehaviour
   void ResolveHit()
   {
     Score++;
-    difficultyLevel++;
-    UpdateScoreText();
-    ClearActiveTile();
     InHitHold = true;
     holdTimer = hitHoldSeconds;
     if(pointPopup != null) pointPopup.SetActive(true);
@@ -216,8 +292,6 @@ public class PianoTileGame:MonoBehaviour
 
   void ResolveMiss()
   {
-    difficultyLevel = Mathf.Max(0, difficultyLevel - difficultyStepsBackOnMiss);
-    ClearActiveTile();
     InPenalty = true;
     holdTimer = penaltySeconds;
     if(penaltyPopup != null) penaltyPopup.SetActive(true);
@@ -231,29 +305,10 @@ public class PianoTileGame:MonoBehaviour
     activeLane = -1;
   }
 
-  void UpdateScoreText()
+  GameObject SpawnTile(Transform spawnPoint, Color color)
   {
-    if(scoreText != null)
-      scoreText.text = "Score: " + Score;
-  }
-
-  //lets RiggingSetup override the inspector value at runtime once the coin flip result is known
-  public void SetHitWindowPercent(float percent)
-  {
-    hitWindowPercent = percent;
-  }
-
-  GameObject SpawnTile(Transform spawnPoint, Color laneColor)
-  {
-    Color border = laneColor * 0.4f;
-    border.a = 1f;
-    return CreateCard(spawnPoint.position, tileWidth, tileHeight, 0.05f, laneColor, border, cardCornerRadiusFrac, cardTextureRes);
-  }
-
-  void SpawnFlash(Vector3 pos)
-  {
-    GameObject flash = CreateCard(pos, tileWidth * 1.4f, tileHeight * 1.4f, 0.06f, Color.white, new Color(0.85f, 0.85f, 0.85f), cardCornerRadiusFrac, cardTextureRes);
-    Destroy(flash, 0.15f);
+    CreateBorderedCube(spawnPoint.position, new Vector3(tileWidth, tileHeight, 0.05f), outlineColor, borderPadding);
+    return CreateCube(spawnPoint.position + Vector3.back * 0.005f, new Vector3(tileWidth, tileHeight, 0.05f), color);
   }
 
   void BuildBoard()
@@ -269,10 +324,10 @@ public class PianoTileGame:MonoBehaviour
     float height = topY - bottomY;
     float z = leftSpawnPoint.position.z + 0.08f;
 
-    CreateCard(new Vector3(centerX, centerY, z), width, height, 0.02f, boardColor, outlineColor, boardCornerRadiusFrac, boardTextureRes);
+    CreateCube(new Vector3(centerX, centerY, z), new Vector3(width, height, 0.02f), boardColor);
 
     float dividerX = (leftSpawnPoint.position.x + rightSpawnPoint.position.x) / 2f;
-    CreateCard(new Vector3(dividerX, centerY, z - 0.02f), railThickness * 1.5f, height, railThickness, outlineColor, outlineColor * 0.6f, 0.4f, 32);
+    CreateCube(new Vector3(dividerX, centerY, z - 0.03f), new Vector3(railThickness, height, railThickness), outlineColor);
   }
 
   void BuildLaneVisuals(Transform spawnPoint, Transform hitLine, Color laneColor)
@@ -284,127 +339,39 @@ public class PianoTileGame:MonoBehaviour
 
     Vector3 leftRailPos = new Vector3(spawnPoint.position.x - tileWidth / 2f, midY, spawnPoint.position.z);
     Vector3 rightRailPos = new Vector3(spawnPoint.position.x + tileWidth / 2f, midY, spawnPoint.position.z);
+    Vector3 railScale = new Vector3(railThickness, railLength, railThickness);
 
-    Color railBorder = laneColor * 0.4f;
-    railBorder.a = 1f;
-    CreateCard(leftRailPos, railThickness, railLength, railThickness, laneColor, railBorder, 0.4f, 32);
-    CreateCard(rightRailPos, railThickness, railLength, railThickness, laneColor, railBorder, 0.4f, 32);
+    CreateCube(leftRailPos, railScale, laneColor);
+    CreateCube(rightRailPos, railScale, laneColor);
 
-    Color glow = hitLineColor;
-    glow.a = hitLineGlowAlpha;
-    CreateGlow(hitLine.position + Vector3.back * 0.01f, tileWidth + railThickness * 2f + hitLineGlowSize, hitLineGlowSize, glow);
-
-    Color lineBorder = hitLineColor * 0.5f;
-    lineBorder.a = 1f;
-    CreateCard(hitLine.position, tileWidth + railThickness * 2f, railThickness * 2.5f, railThickness, hitLineColor, lineBorder, 0.45f, 48);
+    Vector3 lineScale = new Vector3(tileWidth + railThickness * 2f, railThickness * 2.5f, railThickness);
+    CreateBorderedCube(hitLine.position, lineScale, outlineColor, borderPadding);
+    CreateCube(hitLine.position + Vector3.back * 0.005f, lineScale, hitLineColor);
   }
 
-  GameObject CreateCard(Vector3 pos, float worldWidth, float worldHeight, float zThickness, Color fill, Color border, float cornerRadiusFrac, int texRes)
+  void CreateBorderedCube(Vector3 pos, Vector3 baseScale, Color borderColor, float padding)
   {
-    int texWidth = texRes;
-    int texHeight = Mathf.Max(4, Mathf.RoundToInt(texRes * (worldHeight / worldWidth)));
-    int cornerPx = Mathf.RoundToInt(cornerRadiusFrac * Mathf.Min(texWidth, texHeight));
-    int borderPx = Mathf.Max(1, Mathf.RoundToInt(borderPadding / worldWidth * texWidth));
+    Vector3 borderScale = baseScale + new Vector3(padding, padding, 0f);
+    CreateCube(pos + Vector3.forward * 0.005f, borderScale, borderColor);
+  }
 
-    Texture2D tex = MakeCardTexture(texWidth, texHeight, fill, border, cornerPx, borderPx);
-
+  GameObject CreateCube(Vector3 pos, Vector3 scale, Color color)
+  {
     GameObject go = GameObject.CreatePrimitive(PrimitiveType.Cube);
-    go.transform.SetParent(transform);
     go.transform.position = pos;
-    go.transform.localRotation = Quaternion.identity;
-    go.transform.localScale = new Vector3(worldWidth, worldHeight, zThickness);
+    go.transform.localScale = scale;
     Destroy(go.GetComponent<Collider>());
-    go.GetComponent<Renderer>().material = MakeTexturedMaterial(tex);
+    go.GetComponent<Renderer>().material = MakeUnlitMaterial(color);
     return go;
   }
 
-  GameObject CreateGlow(Vector3 pos, float worldWidth, float worldHeight, Color glowColor)
+  Material MakeUnlitMaterial(Color c)
   {
-    Texture2D tex = MakeGlowTexture(16, 64, glowColor);
-
-    GameObject go = GameObject.CreatePrimitive(PrimitiveType.Cube);
-    go.transform.SetParent(this.transform);
-    go.transform.position = pos;
-    go.transform.localScale = new Vector3(worldWidth, worldHeight, 0.01f);
-    Destroy(go.GetComponent<Collider>());
-    go.GetComponent<Renderer>().material = MakeTexturedMaterial(tex);
-    return go;
-  }
-
-  float RoundedBoxSDF(Vector2 p, Vector2 halfSize, float radius)
-  {
-    Vector2 q = new Vector2(Mathf.Abs(p.x) - halfSize.x + radius, Mathf.Abs(p.y) - halfSize.y + radius);
-    float outside = new Vector2(Mathf.Max(q.x, 0f), Mathf.Max(q.y, 0f)).magnitude;
-    float inside = Mathf.Min(Mathf.Max(q.x, q.y), 0f);
-    return outside + inside - radius;
-  }
-
-  Texture2D MakeCardTexture(int texWidth, int texHeight, Color fill, Color border, int cornerPx, int borderPx)
-  {
-    Texture2D tex = new Texture2D(texWidth, texHeight, TextureFormat.RGBA32, false);
-    Vector2 outerHalf = new Vector2(texWidth / 2f, texHeight / 2f);
-    Vector2 innerHalf = new Vector2(Mathf.Max(outerHalf.x - borderPx, 0f), Mathf.Max(outerHalf.y - borderPx, 0f));
-    float innerRadius = Mathf.Max(cornerPx - borderPx, 0f);
-
-    for(int y = 0; y < texHeight; y++)
-    {
-      float t = (float)y / texHeight;
-      Color gradFill = Color.Lerp(fill * 0.85f, fill * 1.15f, t);
-      gradFill.a = fill.a;
-      gradFill.r = Mathf.Clamp01(gradFill.r);
-      gradFill.g = Mathf.Clamp01(gradFill.g);
-      gradFill.b = Mathf.Clamp01(gradFill.b);
-
-      for(int x = 0; x < texWidth; x++)
-      {
-        Vector2 p = new Vector2(x - outerHalf.x + 0.5f, y - outerHalf.y + 0.5f);
-        float dOuter = RoundedBoxSDF(p, outerHalf, cornerPx);
-        float dInner = RoundedBoxSDF(p, innerHalf, innerRadius);
-
-        float outerAlpha = Mathf.Clamp01(0.5f - dOuter);
-        float innerMask = Mathf.Clamp01(0.5f - dInner);
-
-        Color c = Color.Lerp(border, gradFill, innerMask);
-        c.a = outerAlpha;
-        tex.SetPixel(x, y, c);
-      }
-    }
-
-    tex.Apply();
-    tex.filterMode = FilterMode.Bilinear;
-    tex.wrapMode = TextureWrapMode.Clamp;
-    return tex;
-  }
-
-  Texture2D MakeGlowTexture(int texWidth, int texHeight, Color glowColor)
-  {
-    Texture2D tex = new Texture2D(texWidth, texHeight, TextureFormat.RGBA32, false);
-    for(int y = 0; y < texHeight; y++)
-    {
-      float t = Mathf.Abs((y - texHeight / 2f) / (texHeight / 2f));
-      float falloff = Mathf.Clamp01(1f - t);
-      falloff *= falloff;
-      Color c = glowColor;
-      c.a = glowColor.a * falloff;
-
-      for(int x = 0; x < texWidth; x++)
-        tex.SetPixel(x, y, c);
-    }
-    tex.Apply();
-    tex.filterMode = FilterMode.Bilinear;
-    tex.wrapMode = TextureWrapMode.Clamp;
-    return tex;
-  }
-
-  Material MakeTexturedMaterial(Texture2D tex)
-  {
-    Shader shader = Shader.Find("Sprites/Default");
-    if(shader == null) shader = Shader.Find("UI/Default");
+    Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+    if(shader == null) shader = Shader.Find("Unlit/Color");
     if(shader == null) shader = Shader.Find("Standard");
-
     Material mat = new Material(shader);
-    mat.mainTexture = tex;
-    mat.color = Color.white;
+    mat.color = c;
     return mat;
   }
 }
